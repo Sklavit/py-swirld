@@ -1,19 +1,21 @@
+# coding=utf-8
 # -*- coding: utf-8 -*-
 
 
 from random import shuffle
 import sys
 from base64 import b64encode
-from time import localtime, strftime
+from time import localtime, strftime, sleep
 
 from bokeh.io import curdoc
 from bokeh.layouts import layout, widgetbox, row
 from bokeh.plotting import figure
 from bokeh.palettes import plasma, small_palettes
 from bokeh.models import (
-        FixedTicker, Button, ColumnDataSource, PanTool, Scroll,
-        RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool)
-from pysodium import crypto_sign_keypair
+    FixedTicker, Button, ColumnDataSource, PanTool, Scroll,
+    RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions)
+# from pysodium import crypto_sign_keypair
+from sklavit_nacl.signing import SigningKey
 
 from utils import bfs, randrange
 from swirld import Node
@@ -32,14 +34,14 @@ def idx_color(r):
 class App:
     def __init__(self, n_nodes):
         self.i = 0
-        kps = [crypto_sign_keypair() for _ in range(n_nodes)]
-        stake = {kp[0]: 1 for kp in kps}
+        signing_keys = [SigningKey.generate() for _ in range(n_nodes)]
+        stake = {signing_key.verify_key: 1 for signing_key in signing_keys}
 
         network = {}
-        self.nodes = [Node(kp, network, n_nodes, stake) for kp in kps]
+        self.nodes = [Node(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
         for n in self.nodes:
-            network[n.pk] = n.ask_sync
-        self.ids = {kp[0]: i for i, kp in enumerate(kps)}
+            network[n.id] = n.ask_sync
+        self.ids = {signing_key.verify_key: i for i, signing_key in enumerate(signing_keys)}
 
         self.main_its = [n.main() for n in self.nodes]
         for m in self.main_its:
@@ -61,7 +63,7 @@ class App:
             node = self.nodes[new]
             self.tbd = {}
             self.tr_src.data, self.links_src.data = self.extract_data(
-                    node, bfs((node.head,), lambda u: node.hg[u].p), 0)
+                    node, bfs((node.head,), lambda u: node.hg[u].parents), 0)
             for u, j in tuple(self.tbd.items()):
                 self.tr_src.data['line_alpha'][j] = 1 if node.famous.get(u) else 0
                 if u in node.idx:
@@ -79,7 +81,7 @@ class App:
 
         plot = figure(
                 plot_height=700, plot_width=900, y_range=(0, 30),
-                tools=[PanTool(dimensions=['height']),
+                tools=[PanTool(dimensions=Dimensions.height),
                        HoverTool(tooltips=[
                            ('round', '@round'), ('hash', '@hash'),
                            ('timestamp', '@time'), ('payload', '@payload'),
@@ -117,7 +119,7 @@ class App:
         for j, u in enumerate(trs):
             self.tbd[u] = i + j
             ev = node.hg[u]
-            x = self.ids[ev.c]
+            x = self.ids[ev.verify_key]
             y = node.height[u]
             tr_data['x'].append(x)
             tr_data['y'].append(y)
@@ -125,18 +127,18 @@ class App:
             tr_data['round'].append(node.round[u])
             tr_data['hash'].append(b64encode(u).decode('utf8'))
             tr_data['payload'].append(ev.d)
-            tr_data['time'].append(strftime("%Y-%m-%d %H:%M:%S", localtime(ev.t)))
+            tr_data['time'].append(str(ev.t))  # ev.t.strftime("%Y-%m-%d %H:%M:%S"))
 
             tr_data['idx'].append(None)
             tr_data['line_alpha'].append(None)
 
-            if ev.p:
+            if ev.parents:
                 links_data['x0'].extend((x, x))
                 links_data['y0'].extend((y, y))
-                links_data['x1'].append(self.ids[node.hg[ev.p[0]].c])
-                links_data['x1'].append(self.ids[node.hg[ev.p[1]].c])
-                links_data['y1'].append(node.height[ev.p[0]])
-                links_data['y1'].append(node.height[ev.p[1]])
+                links_data['x1'].append(self.ids[node.hg[ev.parents[0]].verify_key])
+                links_data['x1'].append(self.ids[node.hg[ev.parents[1]].verify_key])
+                links_data['y1'].append(node.height[ev.parents[0]])
+                links_data['y1'].append(node.height[ev.parents[1]])
                 links_data['width'].extend((3, 1))
 
         return tr_data, links_data

@@ -1,8 +1,11 @@
+# coding=utf-8
 # -*- coding: utf-8 -*-
 
 from collections import deque
 
-from pysodium import randombytes
+# from pysodium import randombytes
+import nacl
+from nacl.utils import random
 
 
 def toposort(nodes, parents):
@@ -49,7 +52,7 @@ def dfs(s, succ):
 def randrange(n):
     a = (n.bit_length() + 7) // 8  # number of bytes to store n
     b = 8 * a - n.bit_length()     # number of shifts to have good bit number
-    r = int.from_bytes(randombytes(a), byteorder='big') >> b
+    r = int.from_bytes(random(a), byteorder='big') >> b
     while r >= n:
-        r = int.from_bytes(randombytes(a), byteorder='big') >> b
+        r = int.from_bytes(random(a), byteorder='big') >> b
     return r

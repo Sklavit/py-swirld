@@ -1,18 +1,24 @@
+# coding=utf-8
 # -*- coding: utf-8 -*-
-
+import datetime
+import pickle
 from collections import namedtuple, defaultdict
-from pickle import dumps, loads
 from random import choice
-from time import time
+from time import time, sleep
 from itertools import zip_longest
 from functools import reduce
 
-from pysodium import (crypto_sign_keypair, crypto_sign, crypto_sign_open,
-                      crypto_sign_detached, crypto_sign_verify_detached,
-                      crypto_generichash)
+import nacl
+import yaml
+from pickle import loads
 
+from nacl.bindings import crypto_sign
+from nacl.hash import sha512
+# from nacl.signing import SigningKey
+from pickle import dumps
+
+from sklavit_nacl.signing import SigningKey
 from utils import bfs, toposort, randrange
-
 
 C = 6
 
@@ -27,7 +33,35 @@ def majority(it):
         return True, hits[1]
 
 
-Event = namedtuple('Event', 'd p t c s')
+class Event(object):
+
+    def __init__(self, d, parents, t=None):
+        self.d = d
+        self.parents = parents
+        self.t = datetime.datetime.now() if t is None else t
+        self.verify_key = None  # NOTE: previously c
+        self.signature = None   # NOTE: previously s
+
+    @property
+    def body(self):
+        return pickle.dumps((self.d, self.parents, self.t, self.verify_key))
+
+    def sign(self, signing_key):
+        self.verify_key = signing_key.verify_key
+        signature = signing_key.sign(self.body).signature  # detached signature
+        self.signature = signature
+
+    def __getstate__(self):
+        return self.d, self.parents, self.t, self.verify_key, self.signature
+
+    def __setstate__(self, state):
+        self.d, self.parents, self.t, self.verify_key, self.signature = state
+
+    @property
+    def sha512(self):
+        return sha512(pickle.dumps(self))
+
+
 class Trilean:
     false = 0
     true = 1
@@ -35,14 +69,13 @@ class Trilean:
 
 
 class Node:
-    def __init__(self, kp, network, n_nodes, stake):
-        self.pk, self.sk = kp
+    def __init__(self, signing_key, network, n_nodes, stake):
+        self.signing_key = signing_key # TODO implement
         self.network = network  # {pk -> Node.ask_sync} dict
         self.n = n_nodes
         self.stake = stake
         self.tot_stake = sum(stake.values())
         self.min_s = 2 * self.tot_stake / 3  # min stake amount
-
 
         # {event-hash => event}: this is the hash graph
         self.hg = {}
@@ -72,76 +105,82 @@ class Node:
         self.can_see = {}
 
         # init first local event
-        h, ev = self.new_event(None, ())
-        self.add_event(h, ev)
+        event = self.new_event(None, ())
+        h = event.sha512
+        self.add_event(event)
         self.round[h] = 0
-        self.witnesses[0][ev.c] = h
-        self.can_see[h] = {ev.c: h}
+        self.witnesses[0][event.verify_key] = h
+        self.can_see[h] = {event.verify_key: h}
         self.head = h
 
-    def new_event(self, d, p):
-        """Create a new event (and also return it's hash)."""
+    @property
+    def id(self):
+        return self.signing_key.verify_key
 
-        assert p == () or len(p) == 2                   # 2 parents
-        assert p == () or self.hg[p[0]].c == self.pk  # first exists and is self-parent
-        assert p == () or self.hg[p[1]].c != self.pk  # second exists and not self-parent
+    def new_event(self, d, parents):
+        """Create a new event.
+        Access hash from class."""
+        # TODO replace assert with raise Exception
+        assert parents == () or len(parents) == 2  # 2 parents
+        assert parents == () or self.hg[parents[0]].verify_key == self.id  # first exists and is self-parent
+        assert parents == () or self.hg[parents[1]].verify_key != self.id  # second exists and not self-parent
         # TODO: fail if an ancestor of p[1] from creator self.pk is not an
         # ancestor of p[0]
 
-        t = time()
-        s = crypto_sign_detached(dumps((d, p, t, self.pk)), self.sk)
-        ev = Event(d, p, t, self.pk, s)
+        ev = Event(d, parents)
+        ev.sign(self.signing_key)
 
-        return crypto_generichash(dumps(ev)), ev
+        return ev
 
-    def is_valid_event(self, h, ev):
+    def is_valid_event(self, h, event: Event):
         try:
-            crypto_sign_verify_detached(ev.s, dumps(ev[:-1]), ev.c)
+            # crypto_sign_verify_detached(ev.s, dumps(ev[:-1]), ev.c)
+            event.verify_key.verify(event.body, event.signature)
         except ValueError:
             return False
 
-        return (crypto_generichash(dumps(ev)) == h
-                and (ev.p == ()
-                     or (len(ev.p) == 2
-                         and ev.p[0] in self.hg and ev.p[1] in self.hg
-                         and self.hg[ev.p[0]].c == ev.c
-                         and self.hg[ev.p[1]].c != ev.c)))
+        return (event.sha512 == h
+                and (event.parents == ()
+                     or (len(event.parents) == 2
+                         and event.parents[0] in self.hg and event.parents[1] in self.hg
+                         and self.hg[event.parents[0]].verify_key == event.verify_key
+                         and self.hg[event.parents[1]].verify_key != event.verify_key)))
 
-                         # TODO: check if there is a fork (rly need reverse edges?)
-                         #and all(self.hg[x].c != ev.c
-                         #        for x in self.preds[ev.p[0]]))))
+        # TODO: check if there is a fork (rly need reverse edges?)
+        # and all(self.hg[x].verify_key != ev.verify_key
+        #        for x in self.preds[ev.parents[0]]))))
 
-    def add_event(self, h, ev):
+    def add_event(self, ev: Event):
+        h = ev.sha512
         self.hg[h] = ev
         self.tbd.add(h)
-        if ev.p == ():
+        if ev.parents == ():
             self.height[h] = 0
         else:
-            self.height[h] = max(self.height[p] for p in ev.p) + 1
+            self.height[h] = max(self.height[parent] for parent in ev.parents) + 1
 
-    def sync(self, pk, payload):
+    def sync(self, node_id, payload):
         """Update hg and return new event ids in topological order."""
 
-        info = crypto_sign(dumps({c: self.height[h]
-                for c, h in self.can_see[self.head].items()}), self.sk)
-        msg = crypto_sign_open(self.network[pk](self.pk, info), pk)
+        message = dumps({c: self.height[h] for c, h in self.can_see[self.head].items()})
+        signed_message = self.signing_key.sign(message)
+        signed_reply = self.network[node_id](self.id, signed_message)
+        serialized_reply = node_id.verify(signed_reply)
 
-        remote_head, remote_hg = loads(msg)
+        remote_head, remote_hg = loads(serialized_reply)
         new = tuple(toposort(remote_hg.keys() - self.hg.keys(),
-                       lambda u: remote_hg[u].p))
+                             lambda u: remote_hg[u].parents))
 
         for h in new:
             ev = remote_hg[h]
             if self.is_valid_event(h, ev):
-                self.add_event(h, ev)
-
+                self.add_event(ev)  # (, h) ??
 
         if self.is_valid_event(remote_head, remote_hg[remote_head]):
-            h, ev = self.new_event(payload, (self.head, remote_head))
-            # this really shouldn't fail, let's check it to be sure
-            assert self.is_valid_event(h, ev)
-            self.add_event(h, ev)
-            self.head = h
+            ev = self.new_event(payload, (self.head, remote_head))
+            self.add_event(ev)
+            self.head = ev.sha512
+            h = ev.sha512
 
         return new + (h,)
 
@@ -151,21 +190,23 @@ class Node:
         # TODO: only send a diff? maybe with the help of self.height
         # TODO: thread safe? (allow to run while mainloop is running)
 
-        cs = loads(crypto_sign_open(info, pk))
+        msg = pk.verify(info)
+        cs = loads(msg)  #crypto_sign_open(info, pk))
 
         subset = {h: self.hg[h] for h in bfs(
             (self.head,),
-            lambda u: (p for p in self.hg[u].p
-                       if self.hg[p].c not in cs or self.height[p] > cs[self.hg[p].c]))}
+            lambda u: (p for p in self.hg[u].parents
+                       if self.hg[p].verify_key not in cs or self.height[p] > cs[self.hg[p].verify_key]))}
         msg = dumps((self.head, subset))
-        return crypto_sign(msg, self.sk)
+        # return crypto_sign(msg, self.sk)
+        return self.signing_key.sign(msg)
 
     def ancestors(self, c):
         while True:
             yield c
-            if not self.hg[c].p:
+            if not self.hg[c].parents:
                 return
-            c = self.hg[c].p[0]
+            c = self.hg[c].parents[0]
 
     def maxi(self, a, b):
         if self.higher(a, b):
@@ -183,7 +224,6 @@ class Node:
     def higher(self, a, b):
         return a is not None and (b is None or self.height[a] >= self.height[b])
 
-
     def divide_rounds(self, events):
         """Restore invariants for `can_see`, `witnesses` and `round`.
 
@@ -192,18 +232,17 @@ class Node:
 
         for h in events:
             ev = self.hg[h]
-            if ev.p == ():  # this is a root event
+            if ev.parents == ():  # this is a root event
                 self.round[h] = 0
-                self.witnesses[0][ev.c] = h
-                self.can_see[h] = {ev.c: h}
+                self.witnesses[0][ev.verify_key] = h
+                self.can_see[h] = {ev.verify_key: h}
             else:
-                r = max(self.round[p] for p in ev.p)
+                r = max(self.round[p] for p in ev.parents)
 
                 # recurrence relation to update can_see
-                p0, p1 = (self.can_see[p] for p in ev.p)
+                p0, p1 = (self.can_see[p] for p in ev.parents)
                 self.can_see[h] = {c: self.maxi(p0.get(c), p1.get(c))
                                    for c in p0.keys() | p1.keys()}
-
 
                 # count distinct paths to distinct nodes
                 hits = defaultdict(int)
@@ -217,9 +256,9 @@ class Node:
                     self.round[h] = r + 1
                 else:
                     self.round[h] = r
-                self.can_see[h][ev.c] = h
-                if self.round[h] > self.round[ev.p[0]]:
-                    self.witnesses[self.round[h]][ev.c] = h
+                self.can_see[h][ev.verify_key] = h
+                if self.round[h] > self.round[ev.parents[0]]:
+                    self.witnesses[self.round[h]][ev.verify_key] = h
 
     def decide_fame(self):
         max_r = max(self.witnesses)
@@ -268,17 +307,16 @@ class Node:
                         if t > self.min_s:
                             self.votes[y][x] = v
                         else:
-                            # the 1st bit is same as any other bit right?
-                            self.votes[y][x] = bool(self.hg[y].s[0] // 128)
+                            # the 1st bit is same as any other bit right? # TODO not!
+                            self.votes[y][x] = bool(self.hg[y].signature[0] // 128)
 
         new_c = {r for r in done
                  if all(w in self.famous for w in self.witnesses[r].values())}
         self.consensus |= new_c
         return new_c
 
-
     def find_order(self, new_c):
-        to_int = lambda x: int.from_bytes(self.hg[x].s, byteorder='big')
+        to_int = lambda x: int.from_bytes(self.hg[x].signature, byteorder='big')
 
         for r in sorted(new_c):
             f_w = {w for w in self.witnesses[r].values() if self.famous[w]}
@@ -286,11 +324,11 @@ class Node:
             ts = {}
             seen = set()
             for x in bfs(filter(self.tbd.__contains__, f_w),
-                         lambda u: (p for p in self.hg[u].p if p in self.tbd)):
-                c = self.hg[x].c
+                         lambda u: (p for p in self.hg[u].parents if p in self.tbd)):
+                c = self.hg[x].verify_key
                 s = {w for w in f_w if c in self.can_see[w]
-                                    and self.higher(self.can_see[w][c], x)}
-                if sum(self.stake[self.hg[w].c] for w in s) > self.tot_stake / 2:
+                     and self.higher(self.can_see[w][c], x)}
+                if sum(self.stake[self.hg[w].verify_key] for w in s) > self.tot_stake / 2:
                     self.tbd.remove(x)
                     seen.add(x)
                     times = []
@@ -298,19 +336,17 @@ class Node:
                         a = w
                         while (c in self.can_see[a]
                                and self.higher(self.can_see[a][c], x)
-                               and self.hg[a].p):
+                               and self.hg[a].parents):
                             a = self.hg[a].p[0]
                         times.append(self.hg[a].t)
                     times.sort()
-                    ts[x] = .5*(times[len(times)//2]+times[(len(times)+1)//2])
+                    ts[x] = .5 * (times[len(times) // 2] + times[(len(times) + 1) // 2])
             final = sorted(seen, key=lambda x: (ts[x], white ^ to_int(x)))
             for i, x in enumerate(final):
                 self.idx[x] = i + len(self.transactions)
             self.transactions += final
         if self.consensus:
             print(self.consensus)
-
-
 
     def main(self):
         """Main working loop."""
@@ -320,21 +356,26 @@ class Node:
             payload = (yield new)
 
             # pick a random node to sync with but not me
-            c = tuple(self.network.keys() - {self.pk})[randrange(self.n - 1)]
-            new = self.sync(c, payload)
+            node_id = tuple(self.network.keys() - {self.id})[randrange(self.n - 1)]
+            new = self.sync(node_id, payload)
             self.divide_rounds(new)
 
             new_c = self.decide_fame()
             self.find_order(new_c)
 
 
-def test(n_nodes, n_turns):
-    kps = [crypto_sign_keypair() for _ in range(n_nodes)]
+def run_network(n_nodes, n_turns):
+    signing_keys = [SigningKey.generate() for _ in range(n_nodes)]
+
+    for singing_key in signing_keys:
+        print(singing_key)
+
+
     network = {}
-    stake = {kp[0]: 1 for kp in kps}
-    nodes = [Node(kp, network, n_nodes, stake) for kp in kps]
+    stake = {signing_key.verify_key: 1 for signing_key in signing_keys}
+    nodes = [Node(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
     for n in nodes:
-        network[n.pk] = n.ask_sync
+        network[n.id] = n.ask_sync
     mains = [n.main() for n in nodes]
     for m in mains:
         next(m)
@@ -343,3 +384,6 @@ def test(n_nodes, n_turns):
         print('working node: %i, event number: %i' % (r, i))
         next(mains[r])
     return nodes
+
+if __name__ == '__main__':
+    run_network(3, 10)
