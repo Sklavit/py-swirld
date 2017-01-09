@@ -296,7 +296,7 @@ class Node:
                 if r_ - r == 1:
                     self.votes[y][x] = x in s
                 else:
-                    v, t = majority((self.stake[self.hg[w].c], self.votes[w][x]) for w in s)
+                    v, t = majority((self.stake[self.hg[w].verify_key], self.votes[w][x]) for w in s)
                     if (r_ - r) % C != 0:
                         if t > self.min_s:
                             self.famous[x] = v

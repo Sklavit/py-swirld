@@ -9,12 +9,13 @@ It seems to work as intended to me but don't take it for granted!
 
 ## Dependencies
 
-- python3 (obviously!)
-- [pysodium](https://pypi.python.org/pypi/pysodium) for the crypto
-- [bokeh](http://bokeh.pydata.org/en/latest/) for the analysis and interactive
-  visualization
+- python=3.5
+- [pyNaCl] (https://pypi.python.org/pypi/PyNaCl) for the crypto
+  PyNaCl relies on [libsodium] (https://github.com/jedisct1/libsodium), a portable C library. 
+  And copy is bundled with PyNaCl! ([pysodium](https://pypi.python.org/pypi/pysodium) does not have one.)
+- [bokeh](http://bokeh.pydata.org/en/latest/) for the analysis and interactive visualization
 
-## Usage / High-level explainations
+## Usage / High-level explanations
 
 I don't think this is any useful to you if you don't plan to understand how the
 algorithm works so you should read the whitepaper first. After that, the
@@ -44,20 +45,20 @@ bokeh serve --show viz.py --args <number of nodes>
 ```
 
 This will start locally the specified number of nodes and by pressing the
-_play_ button it will start choosing one at random every few miliseconds and do
+_play_ button it will start choosing one at random every few milliseconds and do
 a mainloop step. The color indicates the round number (it's just a random
 color, the only thing is that transactions with the same round have the same
 color).
 
 ## Algorithm details
 
-Actually, I didn't implement the algorithm completely straitforward with full
+Actually, I didn't implement the algorithm completely straightforward with full
 graph traversals everywhere and big loops over all nodes. The main specificity
 I introduced is a mapping I named `can_see`. It is updated along the round
-number in `divide_rounds` and stores for each transaction a dictionnary that
+number in `divide_rounds` and stores for each transaction a dictionary that
 maps to each node the id of the latest (highest) transaction from that node
 this transaction can see (if there is one). It is easily updated by a
-recurrence relation and enables to quickly seable and strongly seable
+recurrence relation and enables to quickly seeable and strongly seeable
 transactions.
 
 With nn and nt respectively the number of nodes and the number of transactions,
