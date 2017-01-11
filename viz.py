@@ -12,7 +12,7 @@ from bokeh.plotting import figure
 from bokeh.palettes import plasma, small_palettes
 from bokeh.models import (
     FixedTicker, Button, ColumnDataSource, PanTool, Scroll,
-    RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions)
+    RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions, logging)
 from sklavit_nacl.signing import SigningKey
 
 from utils import bfs, randrange
@@ -146,7 +146,7 @@ class App:
 
     def animate(self):
         r = randrange(len(self.main_its))
-        print('working node: %i, event number: %i' % (r, self.i))
+        logging.info("working node: {}, event number: {}".format(r, self.i))
         self.i += 1
         new = next(self.main_its[r])
         if r == self.active:

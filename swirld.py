@@ -10,6 +10,7 @@ from functools import reduce
 
 from pickle import loads
 
+import logging
 from nacl.hash import sha512
 from pickle import dumps
 
@@ -413,7 +414,7 @@ def run_network(n_nodes, n_turns):
     network = {}
     for node in nodes:
         node.set(network, n_nodes, stake)  # TODO make network creation explicit !
-        
+
     for n in nodes:
         network[n.id] = n.ask_sync
     mains = [n.main() for n in nodes]
@@ -421,9 +422,10 @@ def run_network(n_nodes, n_turns):
         next(m)
     for i in range(n_turns):
         r = randrange(n_nodes)
-        print('working node: %i, event number: %i' % (r, i))
+        logging.info("working node: {}, event number: {}".format(r, i))
         next(mains[r])
     return nodes
 
 if __name__ == '__main__':
+    logging.getLogger().setLevel(logging.DEBUG)
     run_network(3, 10)

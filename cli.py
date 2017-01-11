@@ -1,5 +1,9 @@
 # coding=utf-8
 
+
+import logging
+logging.getLogger().setLevel(logging.DEBUG)
+
 # bokeh serve --show viz.py --args <number of nodes>
 # import atexit
 #
