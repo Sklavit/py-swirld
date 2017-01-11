@@ -44,9 +44,9 @@ class App:
 
         self.ids = {node.id: i for i, node in enumerate(nodes)}
 
-        self.main_its = [n.main() for n in self.nodes]
+        self.main_its = [n.heartbeat_callback for n in self.nodes]
         for m in self.main_its:
-            next(m)
+            m()
 
         def toggle():
             if play.label == '► Play':
@@ -126,7 +126,7 @@ class App:
             tr_data['y'].append(y)
             tr_data['round_color'].append(round_color(node.round[u]))
             tr_data['round'].append(node.round[u])
-            tr_data['hash'].append(b64encode(u).decode('utf8'))
+            tr_data['hash'].append(u[:8] + "...")
             tr_data['payload'].append(ev.d)
             tr_data['time'].append(str(ev.t))  # ev.t.strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -148,10 +148,15 @@ class App:
         r = randrange(len(self.main_its))
         logging.info("working node: {}, event number: {}".format(r, self.i))
         self.i += 1
-        new = next(self.main_its[r])
+
+        new = self.main_its[r]()
+
         if r == self.active:
             tr, links = self.extract_data(self.nodes[r], new, len(self.tr_src.data['x']))
-            self.tr_src.stream(tr)
+            try:
+                self.tr_src.stream(tr)
+            except Exception:
+                self.tr_src.stream(tr)
             self.links_src.stream(links)
             for u, j in tuple(self.tbd.items()):
                 self.tr_src.data['line_alpha'][j] = 1 if self.nodes[r].famous.get(u) else 0

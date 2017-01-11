@@ -1,8 +1,11 @@
 # coding=utf-8
 # -*- coding: utf-8 -*-
+import base64
 import datetime
 import pickle
 from collections import namedtuple, defaultdict
+from multiprocessing import Process, Queue
+from queue import Empty
 from random import choice
 from time import time, sleep
 from itertools import zip_longest
@@ -56,7 +59,8 @@ class Event(object):
 
     @property
     def sha512(self):
-        return sha512(pickle.dumps(self))
+        h = sha512(pickle.dumps(self))
+        return base64.b64encode(h).decode('utf-8')
 
 
 class Trilean:
@@ -142,6 +146,8 @@ class HashgraphNetNode:
         self.witnesses[0][event.verify_key] = h
         self.can_see[h] = {event.verify_key: h}
         self.head = h
+
+        self.new = Queue()  # list of messages
 
     @classmethod
     def create(cls):
@@ -392,20 +398,31 @@ class HashgraphNetNode:
         if self.consensus:
             print(self.consensus)
 
-    def main(self):
+    def heartbeat_callback(self):
         """Main working loop."""
 
-        new = ()
-        while True:
-            payload = (yield new)
+        payload = []
+        try:
+            while True:
+                message = self.new.get_nowait()
+                payload.append(message)
+        except Empty:
+            # Queue is empty - this is ok
+            pass
 
-            # pick a random node to sync with but not me
-            node_id = tuple(self.network.keys() - {self.id})[randrange(self.n - 1)]
-            new = self.sync(node_id, payload)
-            self.divide_rounds(new)
+        # pick a random node to sync with but not me
+        node_id = tuple(self.network.keys() - {self.id})[randrange(self.n - 1)]
+        new = self.sync(node_id, payload)
 
-            new_c = self.decide_fame()
-            self.find_order(new_c)
+        for message in new:  # TODO check is this logic correct, OR new - is whole hashgraph?
+            self.new.put(message)
+
+        self.divide_rounds(new)
+
+        new_c = self.decide_fame()
+        self.find_order(new_c)
+
+        return payload
 
 
 def run_network(n_nodes, n_turns):
@@ -417,9 +434,10 @@ def run_network(n_nodes, n_turns):
 
     for n in nodes:
         network[n.id] = n.ask_sync
-    mains = [n.main() for n in nodes]
+    mains = [n.heartbeat_callback for n in nodes]
     for m in mains:
-        next(m)
+        m()
+
     for i in range(n_turns):
         r = randrange(n_nodes)
         logging.info("working node: {}, event number: {}".format(r, i))
