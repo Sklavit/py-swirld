@@ -425,24 +425,39 @@ class HashgraphNetNode:
         return payload
 
 
-def run_network(n_nodes, n_turns):
-    nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
-    stake = {node.id: 1 for node in nodes}
-    network = {}
-    for node in nodes:
-        node.set(network, n_nodes, stake)  # TODO make network creation explicit !
+class LocalNetwork(object):
 
-    for n in nodes:
-        network[n.id] = n.ask_sync
-    mains = [n.heartbeat_callback for n in nodes]
-    for m in mains:
-        m()
+    def __init__(self, n_nodes):
+        """Creates local network with given number of nodes."""
+        self.size = n_nodes
+        nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
+        stake = {node.id: 1 for node in nodes}
+        network = {}
+        for node in nodes:
+            node.set(network, n_nodes, stake)  # TODO make network creation explicit !
+
+        self.nodes = nodes
+        for node in self.nodes:
+            network[node.id] = node.ask_sync
+
+        self.ids = {node.id: i for i, node in enumerate(nodes)}
+
+        self.heartbeat_callbacks = [n.heartbeat_callback for n in self.nodes]
+
+    def get_random_node(self):
+        i = randrange(self.size)
+        return self.nodes[i]
+
+
+def run_network(n_nodes, n_turns):
+    network = LocalNetwork(n_nodes)
 
     for i in range(n_turns):
-        r = randrange(n_nodes)
-        logging.info("working node: {}, event number: {}".format(r, i))
-        next(mains[r])
-    return nodes
+        node = network.get_random_node()
+        logging.info("working node: {}, event number: {}".format(node, i))
+        node.heartbeat_callback()
+
+    return network
 
 if __name__ == '__main__':
     logging.getLogger().setLevel(logging.DEBUG)

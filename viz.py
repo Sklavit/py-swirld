@@ -16,8 +16,7 @@ from bokeh.models import (
 from sklavit_nacl.signing import SigningKey
 
 from utils import bfs, randrange
-from swirld import HashgraphNetNode
-
+from swirld import HashgraphNetNode, LocalNetwork
 
 R_COLORS = small_palettes['Greens'][9]
 shuffle(R_COLORS)
@@ -32,21 +31,9 @@ def idx_color(r):
 class App:
     def __init__(self, n_nodes):
         self.i = 0
-        nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
-        stake = {node.id: 1 for node in nodes}
-        network = {}
-        for node in nodes:
-            node.set(network, n_nodes, stake)  # TODO make network creation explicit !
-
-        self.nodes = nodes
-        for node in self.nodes:
-            network[node.id] = node.ask_sync
-
-        self.ids = {node.id: i for i, node in enumerate(nodes)}
-
-        self.main_its = [n.heartbeat_callback for n in self.nodes]
-        for m in self.main_its:
-            m()
+        
+        self.network = LocalNetwork(n_nodes)
+        self.active = self.network.nodes[0]
 
         def toggle():
             if play.label == '► Play':
@@ -60,8 +47,8 @@ class App:
         play.on_click(toggle)
 
         def sel_node(new):
-            self.active = new
-            node = self.nodes[new]
+            node = self.network.nodes[new]
+            self.active = node
             self.tbd = {}
             self.tr_src.data, self.links_src.data = self.extract_data(
                     node, bfs((node.head,), lambda u: node.hg[u].parents), 0)
@@ -120,7 +107,7 @@ class App:
         for j, u in enumerate(trs):
             self.tbd[u] = i + j
             ev = node.hg[u]
-            x = self.ids[ev.verify_key]
+            x = self.network.ids[ev.verify_key]  # TODO check usage
             y = node.height[u]
             tr_data['x'].append(x)
             tr_data['y'].append(y)
@@ -136,8 +123,8 @@ class App:
             if ev.parents:
                 links_data['x0'].extend((x, x))
                 links_data['y0'].extend((y, y))
-                links_data['x1'].append(self.ids[node.hg[ev.parents[0]].verify_key])
-                links_data['x1'].append(self.ids[node.hg[ev.parents[1]].verify_key])
+                links_data['x1'].append(self.network.ids[node.hg[ev.parents[0]].verify_key])  # TODO check usage
+                links_data['x1'].append(self.network.ids[node.hg[ev.parents[1]].verify_key])  # TODO check usage
                 links_data['y1'].append(node.height[ev.parents[0]])
                 links_data['y1'].append(node.height[ev.parents[1]])
                 links_data['width'].extend((3, 1))
@@ -145,25 +132,25 @@ class App:
         return tr_data, links_data
 
     def animate(self):
-        r = randrange(len(self.main_its))
-        logging.info("working node: {}, event number: {}".format(r, self.i))
+        node = self.network.get_random_node()
+        logging.info("working node: {}, event number: {}".format(node, self.i))
         self.i += 1
 
-        new = self.main_its[r]()
+        new = node.heartbeat_callback()
 
-        if r == self.active:
-            tr, links = self.extract_data(self.nodes[r], new, len(self.tr_src.data['x']))
+        if node == self.active:
+            tr, links = self.extract_data(node, new, len(self.tr_src.data['x']))
             try:
                 self.tr_src.stream(tr)
             except Exception:
                 self.tr_src.stream(tr)
             self.links_src.stream(links)
             for u, j in tuple(self.tbd.items()):
-                self.tr_src.data['line_alpha'][j] = 1 if self.nodes[r].famous.get(u) else 0
-                if u in self.nodes[r].idx:
-                    self.tr_src.data['round_color'][j] = idx_color(self.nodes[r].idx[u])
-                self.tr_src.data['idx'][j] = self.nodes[r].idx.get(u)
-                if u in self.nodes[r].idx and u in self.nodes[r].famous:
+                self.tr_src.data['line_alpha'][j] = 1 if node.famous.get(u) else 0
+                if u in node.idx:
+                    self.tr_src.data['round_color'][j] = idx_color(node.idx[u])
+                self.tr_src.data['idx'][j] = node.idx.get(u)
+                if u in node.idx and u in node.famous:
                     del self.tbd[u]
                     print('updated')
             self.tr_src.trigger('data', None, self.tr_src.data)
