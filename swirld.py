@@ -8,13 +8,9 @@ from time import time, sleep
 from itertools import zip_longest
 from functools import reduce
 
-import nacl
-import yaml
 from pickle import loads
 
-from nacl.bindings import crypto_sign
 from nacl.hash import sha512
-# from nacl.signing import SigningKey
 from pickle import dumps
 
 from sklavit_nacl.signing import SigningKey
@@ -68,14 +64,48 @@ class Trilean:
     undetermined = 2
 
 
-class Node:
-    def __init__(self, signing_key, network, n_nodes, stake):
-        self.signing_key = signing_key # TODO implement
-        self.network = network  # {pk -> Node.ask_sync} dict
-        self.n = n_nodes
-        self.stake = stake
-        self.tot_stake = sum(stake.values())
-        self.min_s = 2 * self.tot_stake / 3  # min stake amount
+class HashgraphNetNode:
+    """A node in a hashgraph network.
+
+    Note can:
+    - process incoming requests.
+    - generate requests
+
+    Node <==> Node <==> User
+
+    Network == set of working Nodes
+
+    Node -- User:
+    - create
+    - dump/load identity
+    - start (and connect to network), ready to process requests
+    - shutdown
+    -----
+    - connect to Node
+    - forget Node
+    -----
+    - get (full) state
+    - get consensus
+    - send message
+    - subscribe / unsubscribe listener
+    -----
+
+    Node -- Node:
+    - ping ?; return ping time
+    - get( what to get ?); returns response
+    - post(message); returns response
+    - pinged_get
+    - pinged_post
+
+
+    """
+    def __init__(self, signing_key):
+        self.signing_key = signing_key  # TODO implement
+        self.network = None  # {pk -> Node.ask_sync} dict
+        self.n = None
+        self.stake = None
+        self.tot_stake = None
+        self.min_s = None  # min stake amount
 
         # {event-hash => event}: this is the hash graph
         self.hg = {}
@@ -112,6 +142,20 @@ class Node:
         self.witnesses[0][event.verify_key] = h
         self.can_see[h] = {event.verify_key: h}
         self.head = h
+
+    @classmethod
+    def create(cls):
+        """Creates new node.
+        Generate singing and verification keys. ID will be as verification kay."""
+        signing_key = SigningKey.generate()
+        return cls(signing_key)
+
+    def set(self, network, n_nodes, stake):
+        self.network = network  # {pk -> Node.ask_sync} dict
+        self.n = n_nodes
+        self.stake = stake
+        self.tot_stake = sum(stake.values())
+        self.min_s = 2 * self.tot_stake / 3  # min stake amount
 
     @property
     def id(self):
@@ -373,7 +417,7 @@ def run_network(n_nodes, n_turns):
 
     network = {}
     stake = {signing_key.verify_key: 1 for signing_key in signing_keys}
-    nodes = [Node(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
+    nodes = [HashgraphNetNode(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
     for n in nodes:
         network[n.id] = n.ask_sync
     mains = [n.main() for n in nodes]

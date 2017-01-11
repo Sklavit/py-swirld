@@ -1,7 +1,6 @@
 # coding=utf-8
 # -*- coding: utf-8 -*-
-
-
+from itertools import repeat
 from random import shuffle
 import sys
 from base64 import b64encode
@@ -14,11 +13,10 @@ from bokeh.palettes import plasma, small_palettes
 from bokeh.models import (
     FixedTicker, Button, ColumnDataSource, PanTool, Scroll,
     RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions)
-# from pysodium import crypto_sign_keypair
 from sklavit_nacl.signing import SigningKey
 
 from utils import bfs, randrange
-from swirld import Node
+from swirld import HashgraphNetNode
 
 
 R_COLORS = small_palettes['Greens'][9]
@@ -34,11 +32,16 @@ def idx_color(r):
 class App:
     def __init__(self, n_nodes):
         self.i = 0
-        signing_keys = [SigningKey.generate() for _ in range(n_nodes)]
-        stake = {signing_key.verify_key: 1 for signing_key in signing_keys}
+        nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
+
+        signing_keys = [node.signing_key for node in nodes]
+        stake = {node.id: 1 for node in nodes}
 
         network = {}
-        self.nodes = [Node(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
+        for node in nodes:
+            node.set(network, n_nodes, stake)  # TODO make network creation explicit !
+
+        self.nodes = nodes
         for n in self.nodes:
             network[n.id] = n.ask_sync
         self.ids = {signing_key.verify_key: i for i, signing_key in enumerate(signing_keys)}
