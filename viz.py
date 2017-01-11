@@ -33,18 +33,16 @@ class App:
     def __init__(self, n_nodes):
         self.i = 0
         nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
-
-        signing_keys = [node.signing_key for node in nodes]
         stake = {node.id: 1 for node in nodes}
-
         network = {}
         for node in nodes:
             node.set(network, n_nodes, stake)  # TODO make network creation explicit !
 
         self.nodes = nodes
-        for n in self.nodes:
-            network[n.id] = n.ask_sync
-        self.ids = {signing_key.verify_key: i for i, signing_key in enumerate(signing_keys)}
+        for node in self.nodes:
+            network[node.id] = node.ask_sync
+
+        self.ids = {node.id: i for i, node in enumerate(nodes)}
 
         self.main_its = [n.main() for n in self.nodes]
         for m in self.main_its:

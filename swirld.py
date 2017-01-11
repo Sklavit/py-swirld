@@ -84,8 +84,7 @@ class HashgraphNetNode:
     - connect to Node
     - forget Node
     -----
-    - get (full) state
-    - get consensus
+    - get (full) state; get consensus as sub-request
     - send message
     - subscribe / unsubscribe listener
     -----
@@ -409,15 +408,12 @@ class HashgraphNetNode:
 
 
 def run_network(n_nodes, n_turns):
-    signing_keys = [SigningKey.generate() for _ in range(n_nodes)]
-
-    for singing_key in signing_keys:
-        print(singing_key)
-
-
+    nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
+    stake = {node.id: 1 for node in nodes}
     network = {}
-    stake = {signing_key.verify_key: 1 for signing_key in signing_keys}
-    nodes = [HashgraphNetNode(signing_key, network, n_nodes, stake) for signing_key in signing_keys]
+    for node in nodes:
+        node.set(network, n_nodes, stake)  # TODO make network creation explicit !
+        
     for n in nodes:
         network[n.id] = n.ask_sync
     mains = [n.main() for n in nodes]
