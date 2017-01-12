@@ -89,7 +89,7 @@ class HashgraphNetNode:
     - start (and connect to network), ready to process requests
     - shutdown
     -----
-    - connect to Node
+    - acquaint with Node
     - forget Node
     -----
     - get (full) state; get consensus as sub-request
@@ -108,8 +108,9 @@ class HashgraphNetNode:
     """
     def __init__(self, signing_key):
         self.signing_key = signing_key  # TODO implement
-        self.network = None  # {pk -> Node.ask_sync} dict
-        self.n = None
+
+        self.neighbours = {}   # dict(pk -> Node)
+
         self.stake = None
         self.tot_stake = None
         self.min_s = None  # min stake amount
@@ -152,6 +153,10 @@ class HashgraphNetNode:
 
         self.new = Queue()  # list of messages
 
+    @property
+    def n(self):
+        return len(self.neighbours) + 1
+
     @classmethod
     def create(cls):
         """Creates new node.
@@ -159,12 +164,17 @@ class HashgraphNetNode:
         signing_key = SigningKey.generate()
         return cls(signing_key)
 
-    def set(self, network, n_nodes, stake):
-        self.network = network  # {pk -> Node.ask_sync} dict
-        self.n = n_nodes
+    def set(self, stake):
         self.stake = stake
         self.tot_stake = sum(stake.values())
         self.min_s = 2 * self.tot_stake / 3  # min stake amount
+
+    def acquaint(self, node):
+        """- acquaint with Node"""
+        self.neighbours[node.id] = node
+
+    def forget(self, node):
+        del self.neighbours[node.id]
 
     @property
     def id(self):
@@ -181,7 +191,7 @@ class HashgraphNetNode:
         assert parents == () or self.hg[parents[0]].verify_key == self.id  # first exists and is self-parent
         assert parents == () or self.hg[parents[1]].verify_key != self.id  # second exists and not self-parent
         # TODO: fail if an ancestor of p[1] from creator self.pk is not an
-        # ancestor of p[0]
+        # ancestor of p[0] ???
 
         ev = Event(d, parents)
         ev.sign(self.signing_key)
@@ -225,7 +235,8 @@ class HashgraphNetNode:
 
         logging.debug("{}.sync.signed_message = {}".format(self, signed_message))
 
-        signed_reply = self.network[node_id](self.id, signed_message)
+        node = self.neighbours[node_id]
+        signed_reply = node.ask_sync(self.id, signed_message)
 
         serialized_reply = node_id.verify(signed_reply)  # TODO extract VERIFICATION !
 
@@ -434,7 +445,8 @@ class HashgraphNetNode:
         logging.info("{}.payload = {}".format(self, payload))
 
         # pick a random node to sync with but not me
-        node_id = tuple(self.network.keys() - {self.id})[randrange(self.n - 1)]
+        node_id = choice(list(self.neighbours.keys()))
+
         new = self.sync(node_id, payload)
 
         logging.info("{}.new = {}".format(self, new))
@@ -460,13 +472,14 @@ class LocalNetwork(object):
         self.size = n_nodes
         nodes = [HashgraphNetNode.create() for i in range(n_nodes)]
         stake = {node.id: 1 for node in nodes}
-        network = {}
         for node in nodes:
-            node.set(network, n_nodes, stake)  # TODO make network creation explicit !
+            node.set(stake)  # TODO make network creation explicit !
 
         self.nodes = nodes
         for node in self.nodes:
-            network[node.id] = node.ask_sync
+            for other_node in self.nodes:
+                if node != other_node:
+                    node.acquaint(other_node)
 
         self.ids = {node.id: i for i, node in enumerate(nodes)}
 
