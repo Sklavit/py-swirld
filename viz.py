@@ -133,7 +133,7 @@ class App:
 
     def animate(self):
         node = self.network.get_random_node()
-        logging.info("working node: {}, event number: {}".format(node, self.i))
+
         self.i += 1
 
         new = node.heartbeat_callback()

@@ -50,7 +50,7 @@ class VerifyKey(pynacl_VerifyKey):
         return self._key
 
     def __str__(self):
-        return "VerifyKey(key={})".format(self.encode(encoding.Base64Encoder).decode('utf8'))
+        return "{}...".format(self.encode(encoding.Base64Encoder).decode('utf8')[:6])
 
     def __eq__(self, other):
         return self._key == other._key

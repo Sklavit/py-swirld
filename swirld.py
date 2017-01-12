@@ -42,6 +42,9 @@ class Event(object):
         self.verify_key = None  # NOTE: previously c
         self.signature = None   # NOTE: previously s
 
+    def __str__(self):
+        return "Event({}, {}, {}, {}, {})".format(*(str(attr) for attr in self.__getstate__()))
+
     @property
     def body(self):
         return pickle.dumps((self.d, self.parents, self.t, self.verify_key))
@@ -167,6 +170,9 @@ class HashgraphNetNode:
     def id(self):
         return self.signing_key.verify_key
 
+    def __str__(self):
+        return "Node({})".format(self.id)
+
     def new_event(self, d, parents):
         """Create a new event.
         Access hash from class."""
@@ -200,24 +206,35 @@ class HashgraphNetNode:
         # and all(self.hg[x].verify_key != ev.verify_key
         #        for x in self.preds[ev.parents[0]]))))
 
-    def add_event(self, ev: Event):
-        h = ev.sha512
-        self.hg[h] = ev
+    def add_event(self, event: Event):
+        h = event.sha512
+        self.hg[h] = event
         self.tbd.add(h)
-        if ev.parents == ():
+        if event.parents == ():
             self.height[h] = 0
         else:
-            self.height[h] = max(self.height[parent] for parent in ev.parents) + 1
+            self.height[h] = max(self.height[parent] for parent in event.parents) + 1
+
+        logging.info("{}.add_event: {}".format(self, event))
 
     def sync(self, node_id, payload):
         """Update hg and return new event ids in topological order."""
 
         message = dumps({c: self.height[h] for c, h in self.can_see[self.head].items()})
         signed_message = self.signing_key.sign(message)
-        signed_reply = self.network[node_id](self.id, signed_message)
-        serialized_reply = node_id.verify(signed_reply)
 
-        remote_head, remote_hg = loads(serialized_reply)
+        logging.debug("{}.sync.signed_message = {}".format(self, signed_message))
+
+        signed_reply = self.network[node_id](self.id, signed_message)
+
+        serialized_reply = node_id.verify(signed_reply)  # TODO extract VERIFICATION !
+
+        reply = loads(serialized_reply)
+
+        logging.debug("{}.sync: reply acquired = {}".format(self, reply))
+
+        remote_head, remote_hg = reply
+
         new = tuple(toposort(remote_hg.keys() - self.hg.keys(),
                              lambda u: remote_hg[u].parents))
 
@@ -231,6 +248,8 @@ class HashgraphNetNode:
             self.add_event(ev)
             self.head = ev.sha512
             h = ev.sha512
+
+        logging.info("{}.sync exits.".format(self))
 
         return new + (h,)
 
@@ -401,6 +420,8 @@ class HashgraphNetNode:
     def heartbeat_callback(self):
         """Main working loop."""
 
+        logging.info("{}.heartbeat...".format(self))
+
         payload = []
         try:
             while True:
@@ -410,9 +431,13 @@ class HashgraphNetNode:
             # Queue is empty - this is ok
             pass
 
+        logging.info("{}.payload = {}".format(self, payload))
+
         # pick a random node to sync with but not me
         node_id = tuple(self.network.keys() - {self.id})[randrange(self.n - 1)]
         new = self.sync(node_id, payload)
+
+        logging.info("{}.new = {}".format(self, new))
 
         for message in new:  # TODO check is this logic correct, OR new - is whole hashgraph?
             self.new.put(message)
@@ -421,6 +446,9 @@ class HashgraphNetNode:
 
         new_c = self.decide_fame()
         self.find_order(new_c)
+
+        logging.info("{}.new_c = {}".format(self, new_c))
+        logging.info("{}.heartbeat exits.".format(self))
 
         return payload
 
