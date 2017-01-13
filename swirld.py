@@ -227,7 +227,7 @@ class HashgraphNetNode:
 
         logging.info("{}.add_event: {}".format(self, event))
 
-    def sync(self, node_id, payload):
+    def sync(self, node, payload):
         """Update hg and return new event ids in topological order."""
 
         message = {c: self.height[h] for c, h in self.can_see[self.head].items()}
@@ -235,8 +235,7 @@ class HashgraphNetNode:
         logging.debug("{}.sync:message = {}".format(self, message))
 
         # NOTE: communication channel security must be provided in standard way: SSL
-        node = self.neighbours[node_id]
-        reply = node.ask_sync(self.id, message)
+        reply = node.ask_sync(self, message)
 
         logging.debug("{}.sync: reply acquired = {}".format(self, reply))
 
@@ -260,7 +259,7 @@ class HashgraphNetNode:
 
         return new + (h,)
 
-    def ask_sync(self, node_id, info):
+    def ask_sync(self, node, info):
         """Respond to someone wanting to sync (only public method)."""
 
         # TODO: only send a diff? maybe with the help of self.height
@@ -437,9 +436,9 @@ class HashgraphNetNode:
         logging.info("{}.payload = {}".format(self, payload))
 
         # pick a random node to sync with but not me
-        node_id = choice(list(self.neighbours.keys()))
+        node = choice(list(self.neighbours.values()))
 
-        new = self.sync(node_id, payload)
+        new = self.sync(node, payload)
 
         logging.info("{}.new = {}".format(self, new))
 
