@@ -3,8 +3,10 @@
 import base64
 import datetime
 import pickle
+
 from collections import namedtuple, defaultdict
 from multiprocessing import Process, Queue
+from pprint import pformat
 from queue import Empty
 from random import choice
 from time import time, sleep
@@ -232,17 +234,19 @@ class HashgraphNetNode:
 
         message = {c: self.height[h] for c, h in self.can_see[self.head].items()}
 
-        logging.debug("{}.sync:message = {}".format(self, message))
+        logging.info("{}.sync:message = \n{}".format(self, pformat(message)))
 
         # NOTE: communication channel security must be provided in standard way: SSL
         reply = node.ask_sync(self, message)
 
-        logging.debug("{}.sync: reply acquired = {}".format(self, reply))
+        logging.info("{}.sync: reply acquired = \n{}".format(self, pformat(reply)))
 
         remote_head, remote_hg = reply
 
         new = tuple(toposort(remote_hg.keys() - self.hg.keys(),
                              lambda u: remote_hg[u].parents))
+
+        logging.info("{}.sync:new = \n{}".format(self, pformat(new)))
 
         for h in new:
             ev = remote_hg[h]
