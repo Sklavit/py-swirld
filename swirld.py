@@ -230,17 +230,13 @@ class HashgraphNetNode:
     def sync(self, node_id, payload):
         """Update hg and return new event ids in topological order."""
 
-        message = dumps({c: self.height[h] for c, h in self.can_see[self.head].items()})
-        signed_message = self.signing_key.sign(message)
+        message = {c: self.height[h] for c, h in self.can_see[self.head].items()}
 
-        logging.debug("{}.sync.signed_message = {}".format(self, signed_message))
+        logging.debug("{}.sync:message = {}".format(self, message))
 
+        # NOTE: communication channel security must be provided in standard way: SSL
         node = self.neighbours[node_id]
-        signed_reply = node.ask_sync(self.id, signed_message)
-
-        serialized_reply = node_id.verify(signed_reply)  # TODO extract VERIFICATION !
-
-        reply = loads(serialized_reply)
+        reply = node.ask_sync(self.id, message)
 
         logging.debug("{}.sync: reply acquired = {}".format(self, reply))
 
@@ -264,22 +260,18 @@ class HashgraphNetNode:
 
         return new + (h,)
 
-    def ask_sync(self, pk, info):
+    def ask_sync(self, node_id, info):
         """Respond to someone wanting to sync (only public method)."""
 
         # TODO: only send a diff? maybe with the help of self.height
         # TODO: thread safe? (allow to run while mainloop is running)
 
-        msg = pk.verify(info)
-        cs = loads(msg)  #crypto_sign_open(info, pk))
-
         subset = {h: self.hg[h] for h in bfs(
             (self.head,),
             lambda u: (p for p in self.hg[u].parents
-                       if self.hg[p].verify_key not in cs or self.height[p] > cs[self.hg[p].verify_key]))}
-        msg = dumps((self.head, subset))
-        # return crypto_sign(msg, self.sk)
-        return self.signing_key.sign(msg)
+                       if (self.hg[p].verify_key not in info) or (self.height[p] > info[self.hg[p].verify_key])))}
+
+        return self.head, subset
 
     def ancestors(self, c):
         while True:
