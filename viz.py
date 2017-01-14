@@ -7,21 +7,21 @@ from base64 import b64encode
 from time import localtime, strftime, sleep
 
 from bokeh.io import curdoc
-from bokeh.layouts import layout, widgetbox, row
+from bokeh.layouts import layout, widgetbox, row, column
 from bokeh.plotting import figure
 from bokeh.palettes import plasma, small_palettes
 from bokeh.models import (
     FixedTicker, Button, ColumnDataSource, PanTool, Scroll,
-    RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions, logging)
+    RadioButtonGroup, RadioGroup, Arrow, NormalHead, HoverTool, Dimensions, logging, PreText)
 from sklavit_nacl.signing import SigningKey
 
 from utils import bfs, randrange
 from swirld import HashgraphNetNode, LocalNetwork
 
-R_COLORS = small_palettes['Greens'][9]
-shuffle(R_COLORS)
+R_COLORS = small_palettes['Set2'][8]
+# shuffle(R_COLORS)
 def round_color(r):
-    return R_COLORS[r % 9]
+    return R_COLORS[r % 8]
 
 I_COLORS = plasma(256)
 def idx_color(r):
@@ -45,6 +45,9 @@ class App:
 
         play = Button(label='► Play', width=60)
         play.on_click(toggle)
+
+        do_one_step = Button(label="Do 1 step", width=60)
+        do_one_step.on_click(self.animate)
 
         def sel_node(new):
             node = self.network.nodes[new]
@@ -98,7 +101,12 @@ class App:
                                    line_alpha='line_alpha', source=self.tr_src, line_width=5)
 
         sel_node(0)
-        curdoc().add_root(row([widgetbox(play, selector, width=300), plot], sizing_mode='fixed'))
+
+        self.log = PreText(text='')
+
+        control_column = column(play, do_one_step, selector, self.log)
+        main_row = row([control_column, plot], sizing_mode='fixed')
+        curdoc().add_root(main_row)
 
     def extract_data(self, hashgraph, trs, i):
         tr_data = {'x': [], 'y': [], 'round_color': [], 'idx': [],
@@ -136,6 +144,8 @@ class App:
         node = self.network.get_random_node()
 
         self.i += 1
+
+        self.log.text += "Iteration {}\n".format(self.i)
 
         new = node.heartbeat_callback()
 
