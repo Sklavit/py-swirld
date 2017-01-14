@@ -133,17 +133,19 @@ class Hashgraph:
         self.tot_stake = sum(stake.values())
         self.min_s = 2 * self.tot_stake / 3  # min stake amount
 
-    def new_event(self, d, parents, creator_id):
+    def create_first_event(self, creator_id):
+        event = self._new_event(None, (), creator_id)
+        return event
+
+    def new_event(self, payload, other_parent, creator_id):
+        event = self._new_event(payload, (self.head, other_parent), creator_id)
+        return event
+
+    def _new_event(self, d, parents, creator_id):
         """Create a new event.
         Access hash from class.
         :param creator_id: """
-        # TODO replace assert with raise Exception
-        assert parents == () or len(parents) == 2  # 2 parents
-        assert parents == () or self.hg[parents[0]].verify_key == creator_id  # first exists and is self-parent
-        assert parents == () or self.hg[parents[1]].verify_key != creator_id  # second exists and not self-parent
-        # TODO: fail if an ancestor of p[1] from creator self.pk is not an
-        # ancestor of p[0] ???
-
+        # TODO: fail if an ancestor of p[1] from creator self.pk is not an ancestor of p[0] ???
         ev = Event(d, parents)
         return ev
 
@@ -157,7 +159,7 @@ class Hashgraph:
                 and (event.parents == ()
                      or (len(event.parents) == 2
                          and event.parents[0] in self.hg and event.parents[1] in self.hg
-                         and self.hg[event.parents[0]].verify_key == event.verify_key     # TODO howto unite check with new_event?
+                         and self.hg[event.parents[0]].verify_key == event.verify_key
                          and self.hg[event.parents[1]].verify_key != event.verify_key)))
 
         # TODO: check if there is a fork (rly need reverse edges?)
@@ -368,7 +370,7 @@ class HashgraphNetNode:
         self.hashgraph = Hashgraph()
 
         # init first local event
-        event = self.hashgraph.new_event(None, (), self.id)
+        event = self.hashgraph.create_first_event(self.id)
         event.sign(self.signing_key)
         self.hashgraph.add_first_event(event)
 
@@ -428,7 +430,7 @@ class HashgraphNetNode:
                 self.hashgraph.add_event(event)  # (, h) ??
 
         if self.hashgraph.is_valid_event(remote_head, remote_hg[remote_head]):
-            event = self.hashgraph.new_event(payload, (self.hashgraph.head, remote_head), self.id)
+            event = self.hashgraph.new_event(payload, remote_head, self.id)
             event.sign(self.signing_key)
             self.hashgraph.add_event(event)
             self.hashgraph.head = event.sha512
