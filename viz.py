@@ -48,16 +48,17 @@ class App:
 
         def sel_node(new):
             node = self.network.nodes[new]
+            hashgraph = node.hashgraph
             self.active = node
             self.tbd = {}
             self.tr_src.data, self.links_src.data = self.extract_data(
-                    node, bfs((node.head,), lambda u: node.hg[u].parents), 0)
+                    hashgraph, bfs((hashgraph.head,), lambda u: hashgraph.hg[u].parents), 0)
             for u, j in tuple(self.tbd.items()):
-                self.tr_src.data['line_alpha'][j] = 1 if node.famous.get(u) else 0
-                if u in node.idx:
-                    self.tr_src.data['round_color'][j] = idx_color(node.idx[u])
-                self.tr_src.data['idx'][j] = node.idx.get(u)
-                if u in node.idx and u in node.famous:
+                self.tr_src.data['line_alpha'][j] = 1 if hashgraph.famous.get(u) else 0
+                if u in hashgraph.idx:
+                    self.tr_src.data['round_color'][j] = idx_color(hashgraph.idx[u])
+                self.tr_src.data['idx'][j] = hashgraph.idx.get(u)
+                if u in hashgraph.idx and u in hashgraph.famous:
                     del self.tbd[u]
                     print('updated')
             self.tr_src.trigger('data', None, self.tr_src.data)
@@ -99,20 +100,20 @@ class App:
         sel_node(0)
         curdoc().add_root(row([widgetbox(play, selector, width=300), plot], sizing_mode='fixed'))
 
-    def extract_data(self, node, trs, i):
+    def extract_data(self, hashgraph, trs, i):
         tr_data = {'x': [], 'y': [], 'round_color': [], 'idx': [],
                 'line_alpha': [], 'round': [], 'hash': [], 'payload': [],
                 'time': []}
         links_data = {'x0': [], 'y0': [], 'x1': [], 'y1': [], 'width': []}
         for j, u in enumerate(trs):
             self.tbd[u] = i + j
-            ev = node.hg[u]
+            ev = hashgraph.hg[u]
             x = self.network.ids[ev.verify_key]  # TODO check usage
-            y = node.height[u]
+            y = hashgraph.height[u]
             tr_data['x'].append(x)
             tr_data['y'].append(y)
-            tr_data['round_color'].append(round_color(node.round[u]))
-            tr_data['round'].append(node.round[u])
+            tr_data['round_color'].append(round_color(hashgraph.round[u]))
+            tr_data['round'].append(hashgraph.round[u])
             tr_data['hash'].append(u[:8] + "...")
             tr_data['payload'].append(ev.d)
             tr_data['time'].append(str(ev.t))  # ev.t.strftime("%Y-%m-%d %H:%M:%S"))
@@ -123,10 +124,10 @@ class App:
             if ev.parents:
                 links_data['x0'].extend((x, x))
                 links_data['y0'].extend((y, y))
-                links_data['x1'].append(self.network.ids[node.hg[ev.parents[0]].verify_key])  # TODO check usage
-                links_data['x1'].append(self.network.ids[node.hg[ev.parents[1]].verify_key])  # TODO check usage
-                links_data['y1'].append(node.height[ev.parents[0]])
-                links_data['y1'].append(node.height[ev.parents[1]])
+                links_data['x1'].append(self.network.ids[hashgraph.hg[ev.parents[0]].verify_key])  # TODO check usage
+                links_data['x1'].append(self.network.ids[hashgraph.hg[ev.parents[1]].verify_key])  # TODO check usage
+                links_data['y1'].append(hashgraph.height[ev.parents[0]])
+                links_data['y1'].append(hashgraph.height[ev.parents[1]])
                 links_data['width'].extend((3, 1))
 
         return tr_data, links_data
@@ -139,7 +140,7 @@ class App:
         new = node.heartbeat_callback()
 
         if node == self.active:
-            tr, links = self.extract_data(node, new, len(self.tr_src.data['x']))
+            tr, links = self.extract_data(node.hashgraph, new, len(self.tr_src.data['x']))
             try:
                 self.tr_src.stream(tr)
             except Exception:

@@ -36,6 +36,7 @@ def majority(it):
 
 
 class Event(object):
+    """Event is a node of hashgraph."""
 
     def __init__(self, d, parents, t=None):
         self.d = d
@@ -74,45 +75,8 @@ class Trilean:
     undetermined = 2
 
 
-class HashgraphNetNode:
-    """A node in a hashgraph network.
-
-    Note can:
-    - process incoming requests.
-    - generate requests
-
-    Node <==> Node <==> User
-
-    Network == set of working Nodes
-
-    Node -- User:
-    - create
-    - dump/load identity
-    - start (and connect to network), ready to process requests
-    - shutdown
-    -----
-    - acquaint with Node
-    - forget Node
-    -----
-    - get (full) state; get consensus as sub-request
-    - send message
-    - subscribe / unsubscribe listener
-    -----
-
-    Node -- Node:
-    - ping ?; return ping time
-    - get( what to get ?); returns response
-    - post(message); returns response
-    - pinged_get
-    - pinged_post
-
-
-    """
-    def __init__(self, signing_key):
-        self.signing_key = signing_key  # TODO implement
-
-        self.neighbours = {}   # dict(pk -> Node)
-
+class Hashgraph:
+    def __init__(self):
         self.stake = None
         self.tot_stake = None
         self.min_s = None  # min stake amount
@@ -132,7 +96,7 @@ class HashgraphNetNode:
         self.consensus = set()
         # {event-hash => {event-hash => bool}}
         self.votes = defaultdict(dict)
-        # {round-num => {member-pk => event-hash}}: 
+        # {round-num => {member-pk => event-hash}}:
         self.witnesses = defaultdict(dict)
         self.famous = {}
 
@@ -144,8 +108,7 @@ class HashgraphNetNode:
         # number as ev that ev can see
         self.can_see = {}
 
-        # init first local event
-        event = self.new_event(None, ())
+    def add_first_event(self, event):
         h = event.sha512
         self.add_event(event)
         self.round[h] = 0
@@ -153,72 +116,8 @@ class HashgraphNetNode:
         self.can_see[h] = {event.verify_key: h}
         self.head = h
 
-        self.new = Queue()  # list of messages
-
-    @property
-    def n(self):
-        return len(self.neighbours) + 1
-
-    @classmethod
-    def create(cls):
-        """Creates new node.
-        Generate singing and verification keys. ID will be as verification kay."""
-        signing_key = SigningKey.generate()
-        return cls(signing_key)
-
-    def set(self, stake):
-        self.stake = stake
-        self.tot_stake = sum(stake.values())
-        self.min_s = 2 * self.tot_stake / 3  # min stake amount
-
-    def acquaint(self, node):
-        """- acquaint with Node"""
-        self.neighbours[node.id] = node
-
-    def forget(self, node):
-        del self.neighbours[node.id]
-
-    @property
-    def id(self):
-        return self.signing_key.verify_key
-
-    def __str__(self):
-        return "Node({})".format(self.id)
-
-    def new_event(self, d, parents):
-        """Create a new event.
-        Access hash from class."""
-        # TODO replace assert with raise Exception
-        assert parents == () or len(parents) == 2  # 2 parents
-        assert parents == () or self.hg[parents[0]].verify_key == self.id  # first exists and is self-parent
-        assert parents == () or self.hg[parents[1]].verify_key != self.id  # second exists and not self-parent
-        # TODO: fail if an ancestor of p[1] from creator self.pk is not an
-        # ancestor of p[0] ???
-
-        ev = Event(d, parents)
-        ev.sign(self.signing_key)
-
-        return ev
-
-    def is_valid_event(self, h, event: Event):
-        try:
-            # crypto_sign_verify_detached(ev.s, dumps(ev[:-1]), ev.c)
-            event.verify_key.verify(event.body, event.signature)
-        except ValueError:
-            return False
-
-        return (event.sha512 == h
-                and (event.parents == ()
-                     or (len(event.parents) == 2
-                         and event.parents[0] in self.hg and event.parents[1] in self.hg
-                         and self.hg[event.parents[0]].verify_key == event.verify_key
-                         and self.hg[event.parents[1]].verify_key != event.verify_key)))
-
-        # TODO: check if there is a fork (rly need reverse edges?)
-        # and all(self.hg[x].verify_key != ev.verify_key
-        #        for x in self.preds[ev.parents[0]]))))
-
     def add_event(self, event: Event):
+        """Add given event to this hashgraph."""
         h = event.sha512
         self.hg[h] = event
         self.tbd.add(h)
@@ -229,52 +128,56 @@ class HashgraphNetNode:
 
         logging.info("{}.add_event: {}".format(self, event))
 
-    def sync(self, node, payload):
-        """Update hg and return new event ids in topological order."""
+    def set_stake(self, stake):
+        self.stake = stake
+        self.tot_stake = sum(stake.values())
+        self.min_s = 2 * self.tot_stake / 3  # min stake amount
 
-        message = {c: self.height[h] for c, h in self.can_see[self.head].items()}
+    def new_event(self, d, parents, creator_id):
+        """Create a new event.
+        Access hash from class.
+        :param creator_id: """
+        # TODO replace assert with raise Exception
+        assert parents == () or len(parents) == 2  # 2 parents
+        assert parents == () or self.hg[parents[0]].verify_key == creator_id  # first exists and is self-parent
+        assert parents == () or self.hg[parents[1]].verify_key != creator_id  # second exists and not self-parent
+        # TODO: fail if an ancestor of p[1] from creator self.pk is not an
+        # ancestor of p[0] ???
 
-        logging.info("{}.sync:message = \n{}".format(self, pformat(message)))
+        ev = Event(d, parents)
+        return ev
 
-        # NOTE: communication channel security must be provided in standard way: SSL
-        reply = node.ask_sync(self, message)
+    def is_valid_event(self, h, event: Event):
+        try:
+            event.verify_key.verify(event.body, event.signature)
+        except ValueError:
+            return False
 
-        logging.info("{}.sync: reply acquired = \n{}".format(self, pformat(reply)))
+        return (event.sha512 == h
+                and (event.parents == ()
+                     or (len(event.parents) == 2
+                         and event.parents[0] in self.hg and event.parents[1] in self.hg
+                         and self.hg[event.parents[0]].verify_key == event.verify_key     # TODO howto unite check with new_event?
+                         and self.hg[event.parents[1]].verify_key != event.verify_key)))
 
-        remote_head, remote_hg = reply
+        # TODO: check if there is a fork (rly need reverse edges?)
+        # and all(self.hg[x].verify_key != ev.verify_key
+        #        for x in self.preds[ev.parents[0]]))))
 
-        new = tuple(toposort(remote_hg.keys() - self.hg.keys(),
-                             lambda u: remote_hg[u].parents))
+    def get_fingerprint(self):
+        return {c: self.height[h] for c, h in self.can_see[self.head].items()}
 
-        logging.info("{}.sync:new = \n{}".format(self, pformat(new)))
+    def keys(self):
+        return self.hg.keys()
 
-        for h in new:
-            ev = remote_hg[h]
-            if self.is_valid_event(h, ev):
-                self.add_event(ev)  # (, h) ??
-
-        if self.is_valid_event(remote_head, remote_hg[remote_head]):
-            ev = self.new_event(payload, (self.head, remote_head))
-            self.add_event(ev)
-            self.head = ev.sha512
-            h = ev.sha512
-
-        logging.info("{}.sync exits.".format(self))
-
-        return new + (h,)
-
-    def ask_sync(self, node, info):
-        """Respond to someone wanting to sync (only public method)."""
-
-        # TODO: only send a diff? maybe with the help of self.height
-        # TODO: thread safe? (allow to run while mainloop is running)
-
+    def difference(self, info):
+        """Difference with given hashgraf info (fingerprint?)"""
+        # NOTE we need bfs() due to cheating possibility -- several children of one parent
         subset = {h: self.hg[h] for h in bfs(
             (self.head,),
             lambda u: (p for p in self.hg[u].parents
                        if (self.hg[p].verify_key not in info) or (self.height[p] > info[self.hg[p].verify_key])))}
-
-        return self.head, subset
+        return subset
 
     def ancestors(self, c):
         while True:
@@ -423,6 +326,128 @@ class HashgraphNetNode:
         if self.consensus:
             print(self.consensus)
 
+class HashgraphNetNode:
+    """A node in a hashgraph network.
+
+    Note can:
+    - process incoming requests.
+    - generate requests
+
+    Node <==> Node <==> User
+
+    Network == set of working Nodes
+
+    Node -- User:
+    - create
+    - dump/load identity
+    - start (and connect to network), ready to process requests
+    - shutdown
+    -----
+    - acquaint with Node
+    - forget Node
+    -----
+    - get (full) state; get consensus as sub-request
+    - send message
+    - subscribe / unsubscribe listener
+    -----
+
+    Node -- Node:
+    - ping ?; return ping time
+    - get( what to get ?); returns response
+    - post(message); returns response
+    - pinged_get
+    - pinged_post
+
+
+    """
+    def __init__(self, signing_key):
+        self.signing_key = signing_key  # TODO implement
+
+        self.neighbours = {}   # dict(pk -> Node)
+
+        self.hashgraph = Hashgraph()
+
+        # init first local event
+        event = self.hashgraph.new_event(None, (), self.id)
+        event.sign(self.signing_key)
+        self.hashgraph.add_first_event(event)
+
+        self.new = Queue()  # list of messages
+
+    @property
+    def n(self):
+        return len(self.neighbours) + 1
+
+    @classmethod
+    def create(cls):
+        """Creates new node.
+        Generate singing and verification keys. ID will be as verification kay."""
+        signing_key = SigningKey.generate()
+        return cls(signing_key)
+
+    def set(self, stake):
+        self.hashgraph.set_stake(stake)
+
+    def acquaint(self, node):
+        """- acquaint with Node"""
+        self.neighbours[node.id] = node
+
+    def forget(self, node):
+        """Forget neighbour node."""
+        del self.neighbours[node.id]
+
+    @property
+    def id(self):
+        return self.signing_key.verify_key
+
+    def __str__(self):
+        return "Node({})".format(self.id)
+
+    def sync(self, node, payload):
+        """Update hg and return new event ids in topological order."""
+
+        message = self.hashgraph.get_fingerprint()
+
+        logging.info("{}.sync:message = \n{}".format(self, pformat(message)))
+
+        # NOTE: communication channel security must be provided in standard way: SSL
+        reply = node.ask_sync(self, message)
+
+        logging.info("{}.sync: reply acquired = \n{}".format(self, pformat(reply)))
+
+        remote_head, remote_hg = reply
+
+        new = tuple(toposort(remote_hg.keys() - self.hashgraph.keys(),
+                             lambda u: remote_hg[u].parents))
+
+        logging.info("{}.sync:new = \n{}".format(self, pformat(new)))
+
+        for h in new:
+            event = remote_hg[h]
+            if self.hashgraph.is_valid_event(h, event):  # TODO check?
+                self.hashgraph.add_event(event)  # (, h) ??
+
+        if self.hashgraph.is_valid_event(remote_head, remote_hg[remote_head]):
+            event = self.hashgraph.new_event(payload, (self.hashgraph.head, remote_head), self.id)
+            event.sign(self.signing_key)
+            self.hashgraph.add_event(event)
+            self.hashgraph.head = event.sha512
+            h = event.sha512
+
+        logging.info("{}.sync exits.".format(self))
+
+        return new + (h,)
+
+    def ask_sync(self, node, info):
+        """Respond to someone wanting to sync (only public method)."""
+
+        # TODO: only send a diff? maybe with the help of self.height
+        # TODO: thread safe? (allow to run while mainloop is running)
+
+        subset = self.hashgraph.difference(info)
+
+        return self.hashgraph.head, subset
+
     def heartbeat_callback(self):
         """Main working loop."""
 
@@ -449,10 +474,10 @@ class HashgraphNetNode:
         for message in new:  # TODO check is this logic correct, OR new - is whole hashgraph?
             self.new.put(message)
 
-        self.divide_rounds(new)
+        self.hashgraph.divide_rounds(new)
 
-        new_c = self.decide_fame()
-        self.find_order(new_c)
+        new_c = self.hashgraph.decide_fame()
+        self.hashgraph.find_order(new_c)
 
         logging.info("{}.new_c = {}".format(self, new_c))
         logging.info("{}.heartbeat exits.".format(self))
