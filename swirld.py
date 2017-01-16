@@ -82,7 +82,7 @@ class Hashgraph:
         self.min_s = None  # min stake amount
 
         # {event-hash => event}: this is the hash graph
-        self.hg = {}
+        self.lookup_table = {}
         # event-hash: latest event from me
         self.head = None
         # {event-hash => round-num}: assigned round number of each event
@@ -100,8 +100,7 @@ class Hashgraph:
         self.witnesses = defaultdict(dict)
         self.famous = {}
 
-        # {event-hash => int}: 0 or 1 + max(height of parents) (only useful for
-        # drawing, it may move to viz.py)
+        # {event-hash => int}: 0 or 1 + max(height of parents)
         self.height = {}
         # {event-hash => {member-pk => event-hash}}: stores for each event ev
         # and for each member m the latest event from m having same round
@@ -119,7 +118,7 @@ class Hashgraph:
     def add_event(self, event: Event):
         """Add given event to this hashgraph."""
         h = event.sha512
-        self.hg[h] = event
+        self.lookup_table[h] = event
         self.tbd.add(h)
         if event.parents == ():
             self.height[h] = 0
@@ -158,9 +157,9 @@ class Hashgraph:
         return (event.sha512 == h
                 and (event.parents == ()
                      or (len(event.parents) == 2
-                         and event.parents[0] in self.hg and event.parents[1] in self.hg
-                         and self.hg[event.parents[0]].verify_key == event.verify_key
-                         and self.hg[event.parents[1]].verify_key != event.verify_key)))
+                         and event.parents[0] in self.lookup_table and event.parents[1] in self.lookup_table
+                         and self.lookup_table[event.parents[0]].verify_key == event.verify_key
+                         and self.lookup_table[event.parents[1]].verify_key != event.verify_key)))
 
         # TODO: check if there is a fork (rly need reverse edges?)
         # and all(self.hg[x].verify_key != ev.verify_key
@@ -170,23 +169,23 @@ class Hashgraph:
         return {c: self.height[h] for c, h in self.can_see[self.head].items()}
 
     def keys(self):
-        return self.hg.keys()
+        return self.lookup_table.keys()
 
     def difference(self, info):
         """Difference with given hashgraf info (fingerprint?)"""
         # NOTE we need bfs() due to cheating possibility -- several children of one parent
-        subset = {h: self.hg[h] for h in bfs(
+        subset = {h: self.lookup_table[h] for h in bfs(
             (self.head,),
-            lambda u: (p for p in self.hg[u].parents
-                       if (self.hg[p].verify_key not in info) or (self.height[p] > info[self.hg[p].verify_key])))}
+            lambda u: (p for p in self.lookup_table[u].parents
+                       if (self.lookup_table[p].verify_key not in info) or (self.height[p] > info[self.lookup_table[p].verify_key])))}
         return subset
 
     def ancestors(self, c):
         while True:
             yield c
-            if not self.hg[c].parents:
+            if not self.lookup_table[c].parents:
                 return
-            c = self.hg[c].parents[0]
+            c = self.lookup_table[c].parents[0]
 
     def maxi(self, a, b):
         if self.higher(a, b):
@@ -211,7 +210,7 @@ class Hashgraph:
         """
 
         for h in events:
-            ev = self.hg[h]
+            ev = self.lookup_table[h]
             if ev.parents == ():  # this is a root event
                 self.round[h] = 0
                 self.witnesses[0][ev.verify_key] = h
@@ -276,7 +275,7 @@ class Hashgraph:
                 if r_ - r == 1:
                     self.votes[y][x] = x in s
                 else:
-                    v, t = majority((self.stake[self.hg[w].verify_key], self.votes[w][x]) for w in s)
+                    v, t = majority((self.stake[self.lookup_table[w].verify_key], self.votes[w][x]) for w in s)
                     if (r_ - r) % C != 0:
                         if t > self.min_s:
                             self.famous[x] = v
@@ -288,7 +287,7 @@ class Hashgraph:
                             self.votes[y][x] = v
                         else:
                             # the 1st bit is same as any other bit right? # TODO not!
-                            self.votes[y][x] = bool(self.hg[y].signature[0] // 128)
+                            self.votes[y][x] = bool(self.lookup_table[y].signature[0] // 128)
 
         new_c = {r for r in done
                  if all(w in self.famous for w in self.witnesses[r].values())}
@@ -296,7 +295,7 @@ class Hashgraph:
         return new_c
 
     def find_order(self, new_c):
-        to_int = lambda x: int.from_bytes(self.hg[x].signature, byteorder='big')
+        to_int = lambda x: int.from_bytes(self.lookup_table[x].signature, byteorder='big')
 
         for r in sorted(new_c):
             f_w = {w for w in self.witnesses[r].values() if self.famous[w]}
@@ -304,11 +303,11 @@ class Hashgraph:
             ts = {}
             seen = set()
             for x in bfs(filter(self.tbd.__contains__, f_w),
-                         lambda u: (p for p in self.hg[u].parents if p in self.tbd)):
-                c = self.hg[x].verify_key
+                         lambda u: (p for p in self.lookup_table[u].parents if p in self.tbd)):
+                c = self.lookup_table[x].verify_key
                 s = {w for w in f_w if c in self.can_see[w]
                      and self.higher(self.can_see[w][c], x)}
-                if sum(self.stake[self.hg[w].verify_key] for w in s) > self.tot_stake / 2:
+                if sum(self.stake[self.lookup_table[w].verify_key] for w in s) > self.tot_stake / 2:
                     self.tbd.remove(x)
                     seen.add(x)
                     times = []
@@ -316,9 +315,9 @@ class Hashgraph:
                         a = w
                         while (c in self.can_see[a]
                                and self.higher(self.can_see[a][c], x)
-                               and self.hg[a].parents):
-                            a = self.hg[a].p[0]
-                        times.append(self.hg[a].t)
+                               and self.lookup_table[a].parents):
+                            a = self.lookup_table[a].p[0]
+                        times.append(self.lookup_table[a].t)
                     times.sort()
                     ts[x] = .5 * (times[len(times) // 2] + times[(len(times) + 1) // 2])
             final = sorted(seen, key=lambda x: (ts[x], white ^ to_int(x)))
@@ -408,12 +407,12 @@ class HashgraphNetNode:
     def sync(self, node, payload):
         """Update hg and return new event ids in topological order."""
 
-        message = self.hashgraph.get_fingerprint()
+        fingerprint = self.hashgraph.get_fingerprint()
 
-        logging.info("{}.sync:message = \n{}".format(self, pformat(message)))
+        logging.info("{}.sync:message = \n{}".format(self, pformat(fingerprint)))
 
         # NOTE: communication channel security must be provided in standard way: SSL
-        reply = node.ask_sync(self, message)
+        reply = node.ask_sync(self, fingerprint)
 
         logging.info("{}.sync: reply acquired = \n{}".format(self, pformat(reply)))
 
@@ -440,13 +439,13 @@ class HashgraphNetNode:
 
         return new + (h,)
 
-    def ask_sync(self, node, info):
+    def ask_sync(self, node, fingerprint):
         """Respond to someone wanting to sync (only public method)."""
 
         # TODO: only send a diff? maybe with the help of self.height
         # TODO: thread safe? (allow to run while mainloop is running)
 
-        subset = self.hashgraph.difference(info)
+        subset = self.hashgraph.difference(fingerprint)
 
         return self.hashgraph.head, subset
 

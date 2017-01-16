@@ -55,7 +55,7 @@ class App:
             self.active = node
             self.tbd = {}
             self.tr_src.data, self.links_src.data = self.extract_data(
-                    hashgraph, bfs((hashgraph.head,), lambda u: hashgraph.hg[u].parents), 0)
+                    hashgraph, bfs((hashgraph.head,), lambda u: hashgraph.lookup_table[u].parents), 0)
             for u, j in tuple(self.tbd.items()):
                 self.tr_src.data['line_alpha'][j] = 1 if hashgraph.famous.get(u) else 0
                 if u in hashgraph.idx:
@@ -115,7 +115,7 @@ class App:
         links_data = {'x0': [], 'y0': [], 'x1': [], 'y1': [], 'width': []}
         for j, u in enumerate(trs):
             self.tbd[u] = i + j
-            ev = hashgraph.hg[u]
+            ev = hashgraph.lookup_table[u]
             x = self.network.ids[ev.verify_key]  # TODO check usage
             y = hashgraph.height[u]
             tr_data['x'].append(x)
@@ -132,8 +132,8 @@ class App:
             if ev.parents:
                 links_data['x0'].extend((x, x))
                 links_data['y0'].extend((y, y))
-                links_data['x1'].append(self.network.ids[hashgraph.hg[ev.parents[0]].verify_key])  # TODO check usage
-                links_data['x1'].append(self.network.ids[hashgraph.hg[ev.parents[1]].verify_key])  # TODO check usage
+                links_data['x1'].append(self.network.ids[hashgraph.lookup_table[ev.parents[0]].verify_key])  # TODO check usage
+                links_data['x1'].append(self.network.ids[hashgraph.lookup_table[ev.parents[1]].verify_key])  # TODO check usage
                 links_data['y1'].append(hashgraph.height[ev.parents[0]])
                 links_data['y1'].append(hashgraph.height[ev.parents[1]])
                 links_data['width'].extend((3, 1))
