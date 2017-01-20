@@ -35,6 +35,8 @@ class App:
         self.network = LocalNetwork(n_nodes)
         self.active = self.network.nodes[0]
 
+        self.tbd = {}
+
         def toggle():
             if play.label == '► Play':
                 play.label = '❚❚ Pause'
@@ -49,27 +51,11 @@ class App:
         do_one_step = Button(label="Do 1 step", width=60)
         do_one_step.on_click(self.animate)
 
-        def sel_node(new):
-            node = self.network.nodes[new]
-            hashgraph = node.hashgraph
-            self.active = node
-            self.tbd = {}
-            self.tr_src.data, self.links_src.data = self.extract_data(
-                    hashgraph, bfs((hashgraph.head,), lambda u: hashgraph.lookup_table[u].parents), 0)
-            for u, j in tuple(self.tbd.items()):
-                self.tr_src.data['line_alpha'][j] = 1 if hashgraph.famous.get(u) else 0
-                if u in hashgraph.idx:
-                    self.tr_src.data['round_color'][j] = idx_color(hashgraph.idx[u])
-                self.tr_src.data['idx'][j] = hashgraph.idx.get(u)
-                if u in hashgraph.idx and u in hashgraph.famous:
-                    del self.tbd[u]
-                    print('updated')
-            self.tr_src.trigger('data', None, self.tr_src.data)
 
         selector = RadioButtonGroup(
                 labels=['Node %i' % i for i in range(n_nodes)], active=0,
                 name='Node to inspect')
-        selector.on_click(sel_node)
+        selector.on_click(self.sel_node)
 
         plot = figure(
                 plot_height=700, plot_width=900, y_range=(0, 30),
@@ -100,7 +86,7 @@ class App:
         self.tr_rend = plot.circle(x='x', y='y', size=20, color='round_color',
                                    line_alpha='line_alpha', source=self.tr_src, line_width=5)
 
-        sel_node(0)
+        self.sel_node(0)
 
         self.log = PreText(text='')
 
@@ -108,34 +94,54 @@ class App:
         main_row = row([control_column, plot], sizing_mode='fixed')
         curdoc().add_root(main_row)
 
+    def sel_node(self, new: int):
+        node = self.network.nodes[new]
+        hashgraph = node.hashgraph
+        self.active = node
+        self.tbd = {}
+        self.tr_src.data, self.links_src.data = self.extract_data(
+                hashgraph, bfs((hashgraph.head,), lambda u: u.parents), 0)
+        for u, j in tuple(self.tbd.items()):
+            if u in hashgraph.famous:
+                self.tr_src.data['line_alpha'][j] = 1
+            else:
+                self.tr_src.data['line_alpha'][j] = 0
+
+            if u in hashgraph.idx:
+                self.tr_src.data['round_color'][j] = idx_color(hashgraph.idx[u])
+            self.tr_src.data['idx'][j] = hashgraph.idx.get(u)
+            if u in hashgraph.idx and u in hashgraph.famous:
+                del self.tbd[u]
+                print('updated')
+        self.tr_src.trigger('data', None, self.tr_src.data)
+
     def extract_data(self, hashgraph, trs, i):
         tr_data = {'x': [], 'y': [], 'round_color': [], 'idx': [],
                 'line_alpha': [], 'round': [], 'hash': [], 'payload': [],
                 'time': []}
         links_data = {'x0': [], 'y0': [], 'x1': [], 'y1': [], 'width': []}
-        for j, u in enumerate(trs):
-            self.tbd[u] = i + j
-            ev = hashgraph.lookup_table[u]
-            x = self.network.ids[ev.verify_key]  # TODO check usage
-            y = hashgraph.height[u]
+        for j, event in enumerate(trs):
+            self.tbd[event] = i + j  # idx of event in self.trs
+            x = self.network.ids[event.verify_key]  # TODO check usage
+            y = event.height
             tr_data['x'].append(x)
             tr_data['y'].append(y)
-            tr_data['round_color'].append(round_color(hashgraph.round[u]))
-            tr_data['round'].append(hashgraph.round[u])
-            tr_data['hash'].append(u[:8] + "...")
-            tr_data['payload'].append(ev.d)
-            tr_data['time'].append(str(ev.t))  # ev.t.strftime("%Y-%m-%d %H:%M:%S"))
+            tr_data['round_color'].append(round_color(event.round))
+            tr_data['round'].append(event.round)
+            tr_data['hash'].append(event.id[:8] + "...")
+            tr_data['payload'].append("".format(event.d))
+            tr_data['time'].append(str(event.t))  # ev.t.strftime("%Y-%m-%d %H:%M:%S"))
 
             tr_data['idx'].append(None)
             tr_data['line_alpha'].append(None)
 
-            if ev.parents:
+            if event.parents:
                 links_data['x0'].extend((x, x))
                 links_data['y0'].extend((y, y))
-                links_data['x1'].append(self.network.ids[hashgraph.lookup_table[ev.parents[0]].verify_key])  # TODO check usage
-                links_data['x1'].append(self.network.ids[hashgraph.lookup_table[ev.parents[1]].verify_key])  # TODO check usage
-                links_data['y1'].append(hashgraph.height[ev.parents[0]])
-                links_data['y1'].append(hashgraph.height[ev.parents[1]])
+                links_data['x1'].append(self.network.ids[event.parents[0].verify_key])  # TODO check usage
+                links_data['x1'].append(self.network.ids[event.parents[1].verify_key])  # TODO check usage
+                links_data['y1'].append(event.parents[0].height)
+                links_data['y1'].append(event.parents[1].height)
                 links_data['width'].extend((3, 1))
 
         return tr_data, links_data
@@ -150,18 +156,24 @@ class App:
         new = node.heartbeat_callback()
 
         if node == self.active:
-            tr, links = self.extract_data(node.hashgraph, new, len(self.tr_src.data['x']))
+            hashgraph = node.hashgraph
+
+            # TODO remake the following code to include inside hashgraph?
+            tr, links = self.extract_data(hashgraph, new, len(self.tr_src.data['x']))
             try:
                 self.tr_src.stream(tr)
-            except Exception:
+            except Exception as e:
                 self.tr_src.stream(tr)
             self.links_src.stream(links)
             for u, j in tuple(self.tbd.items()):
-                self.tr_src.data['line_alpha'][j] = 1 if node.famous.get(u) else 0
-                if u in node.idx:
-                    self.tr_src.data['round_color'][j] = idx_color(node.idx[u])
-                self.tr_src.data['idx'][j] = node.idx.get(u)
-                if u in node.idx and u in node.famous:
+                if u in hashgraph.famous:
+                    self.tr_src.data['line_alpha'][j] = 1
+                else:
+                    self.tr_src.data['line_alpha'][j] = 0
+                if u in hashgraph.idx:
+                    self.tr_src.data['round_color'][j] = idx_color(hashgraph.idx[u])
+                self.tr_src.data['idx'][j] = hashgraph.idx.get(u)
+                if u in hashgraph.idx and u in hashgraph.famous:
                     del self.tbd[u]
                     print('updated')
             self.tr_src.trigger('data', None, self.tr_src.data)

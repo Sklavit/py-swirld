@@ -52,6 +52,9 @@ class VerifyKey(pynacl_VerifyKey):
     def __str__(self):
         return "{}...".format(self.encode(encoding.Base64Encoder).decode('utf8')[:6])
 
+    def __repr__(self):
+        return self.__str__()
+
     def __eq__(self, other):
         return self._key == other._key
 
@@ -86,6 +89,9 @@ class SigningKey(pynacl_SigningKey):
 
     def __str__(self):
         return "SigningKey(seed={})".format(self.encode(encoding.Base64Encoder).decode('utf8'))
+
+    def __repr__(self):
+        return self.__str__()
 
     def __eq__(self, other):
         return self._seed == other._seed

@@ -16,8 +16,14 @@ from functools import reduce
 from pickle import loads
 
 import logging
+
+import copy
+from nacl.bindings import crypto_hash_sha512
+from nacl.encoding import Base64Encoder
 from nacl.hash import sha512
 from pickle import dumps
+
+from profilehooks import profile
 
 from sklavit_nacl.signing import SigningKey
 from utils import bfs, toposort, randrange
@@ -35,38 +41,57 @@ def majority(it):
         return True, hits[1]
 
 
-class Event(object):
+class Event(object):  # TODO make it namedtuple
     """Event is a node of hashgraph."""
 
-    def __init__(self, d, parents, t=None):
+    def __init__(self, signing_key, d, parents, t=None):
+        # Immutable body of Event
         self.d = d
         self.parents = parents
         self.t = datetime.datetime.now() if t is None else t
-        self.verify_key = None  # NOTE: previously c
-        self.signature = None   # NOTE: previously s
+        self.verify_key = signing_key.verify_key  # Setting of verify_key is delayed TODO fix it!
+        # End of immutable body
+        parents_ids = [parent.id for parent in self.parents]
+        self.__body = pickle.dumps((self.d, parents_ids, self.t, self.verify_key))
+
+        # Sign Event body.
+        self.signature = signing_key.sign(self.__body).signature
+
+        # Compute Event hash and ID.
+        h = Base64Encoder.encode(crypto_hash_sha512(self.__body)).decode()
+        self.__id = h[:5]  # TODO fix this limit
+
+        # assigned round number of each event
+        self.round = None
+
+        # {event-hash => bool}
+        self.votes = dict()  # TODO only votes are Graph node-specific????
+
+        # 0 or 1 + max(height of parents)
+        if parents == ():
+            self.height = 0
+        else:
+            self.height = max(parent.height for parent in parents) + 1
+
+        # {node-id = > event}}: stores for each event ev
+        # and for each member m the latest event from m having same round
+        # number as ev that ev can see
+        self.can_see = {}
 
     def __str__(self):
-        return "Event({}, {}, {}, {}, {})".format(*(str(attr) for attr in self.__getstate__()))
+        return "{{Event}}{}... by {}, H{}, R{}, P{}, D{}".format(
+            self.id[:6], self.verify_key, self.height, self.round, [p.id for p in self.parents], self.d)
+
+    def __repr__(self):
+        return self.__str__()
 
     @property
     def body(self):
-        return pickle.dumps((self.d, self.parents, self.t, self.verify_key))
-
-    def sign(self, signing_key):
-        self.verify_key = signing_key.verify_key
-        signature = signing_key.sign(self.body).signature  # detached signature
-        self.signature = signature
-
-    def __getstate__(self):
-        return self.d, self.parents, self.t, self.verify_key, self.signature
-
-    def __setstate__(self, state):
-        self.d, self.parents, self.t, self.verify_key, self.signature = state
+        return self.__body
 
     @property
-    def sha512(self):
-        h = sha512(pickle.dumps(self))
-        return base64.b64encode(h).decode('utf-8')
+    def id(self):
+        return self.__id
 
 
 class Trilean:
@@ -83,47 +108,52 @@ class Hashgraph:
 
         # {event-hash => event}: this is the hash graph
         self.lookup_table = {}
+
         # event-hash: latest event from me
         self.head = None
+
         # {event-hash => round-num}: assigned round number of each event
-        self.round = {}
+        # self.round = {}
+
         # {event-hash}: events for which final order remains to be determined
         self.tbd = set()
+
         # [event-hash]: final order of the transactions
         self.transactions = []
+
         self.idx = {}
+
         # {round-num}: rounds where famousness is fully decided
         self.consensus = set()
+
         # {event-hash => {event-hash => bool}}
-        self.votes = defaultdict(dict)
+        # self.votes = defaultdict(dict)
+
         # {round-num => {member-pk => event-hash}}:
         self.witnesses = defaultdict(dict)
+
         self.famous = {}
 
         # {event-hash => int}: 0 or 1 + max(height of parents)
-        self.height = {}
+        # self.height = {}
+
         # {event-hash => {member-pk => event-hash}}: stores for each event ev
         # and for each member m the latest event from m having same round
         # number as ev that ev can see
-        self.can_see = {}
+        # self.can_see = {}
 
     def add_first_event(self, event):
-        h = event.sha512
         self.add_event(event)
-        self.round[h] = 0
-        self.witnesses[0][event.verify_key] = h
-        self.can_see[h] = {event.verify_key: h}
-        self.head = h
+        event.round = 0  # TODO move to event creation ?
+        self.witnesses[0][event.verify_key] = event
+        event.can_see = {event.verify_key: event}  # TODO move to event creation ?
+        self.head = event
 
     def add_event(self, event: Event):
         """Add given event to this hashgraph."""
-        h = event.sha512
+        h = event.id
         self.lookup_table[h] = event
-        self.tbd.add(h)
-        if event.parents == ():
-            self.height[h] = 0
-        else:
-            self.height[h] = max(self.height[parent] for parent in event.parents) + 1
+        self.tbd.add(h)  # TODO add event?
 
         logging.info("{}.add_event: {}".format(self, event))
 
@@ -132,41 +162,43 @@ class Hashgraph:
         self.tot_stake = sum(stake.values())
         self.min_s = 2 * self.tot_stake / 3  # min stake amount
 
-    def create_first_event(self, creator_id):
-        event = self._new_event(None, (), creator_id)
+    def create_first_event(self, signing_key):
+        event = self._new_event(None, (), signing_key)
         return event
 
     def new_event(self, payload, other_parent, creator_id):
         event = self._new_event(payload, (self.head, other_parent), creator_id)
         return event
 
-    def _new_event(self, d, parents, creator_id):
+    def _new_event(self, d, parents, signing_key):
         """Create a new event.
         Access hash from class.
         :param creator_id: """
         # TODO: fail if an ancestor of p[1] from creator self.pk is not an ancestor of p[0] ???
-        ev = Event(d, parents)
-        return ev
+        event = Event(signing_key, d, parents)
+        logging.info("{}._new_event: {}".format(self, event))
+        return event
 
-    def is_valid_event(self, h, event: Event):
+    def is_valid_event(self, id, event: Event):
         try:
             event.verify_key.verify(event.body, event.signature)
         except ValueError:
             return False
 
-        return (event.sha512 == h
+        return (event.id == id
                 and (event.parents == ()
                      or (len(event.parents) == 2
-                         and event.parents[0] in self.lookup_table and event.parents[1] in self.lookup_table
-                         and self.lookup_table[event.parents[0]].verify_key == event.verify_key
-                         and self.lookup_table[event.parents[1]].verify_key != event.verify_key)))
+                         and event.parents[0].id in self.lookup_table and event.parents[1].id in self.lookup_table
+                         and event.parents[0].verify_key == event.verify_key
+                         and event.parents[1].verify_key != event.verify_key)))
 
         # TODO: check if there is a fork (rly need reverse edges?)
-        # and all(self.hg[x].verify_key != ev.verify_key
+        # and all(x.verify_key != ev.verify_key
         #        for x in self.preds[ev.parents[0]]))))
 
     def get_fingerprint(self):
-        return {c: self.height[h] for c, h in self.can_see[self.head].items()}
+        """Returns dict of heights for each branch (== HashgraghNetNode)."""
+        return {branch_id: event.height for branch_id, event in self.head.can_see.items()}
 
     def keys(self):
         return self.lookup_table.keys()
@@ -174,18 +206,22 @@ class Hashgraph:
     def difference(self, info):
         """Difference with given hashgraf info (fingerprint?)"""
         # NOTE we need bfs() due to cheating possibility -- several children of one parent
-        subset = {h: self.lookup_table[h] for h in bfs(
-            (self.head,),
-            lambda u: (p for p in self.lookup_table[u].parents
-                       if (self.lookup_table[p].verify_key not in info) or (self.height[p] > info[self.lookup_table[p].verify_key])))}
+        # succ = lambda u: (p for p in u.parents
+        #                if (p.verify_key not in info) or (p.height > info[p.verify_key]))
+        def succ(u):
+            return [p for p in u.parents
+                    if (p.verify_key not in info) or (p.height > info[p.verify_key])]
+
+        subset = [h
+                  for h in bfs((self.head,), succ)]
         return subset
 
     def ancestors(self, c):
         while True:
             yield c
-            if not self.lookup_table[c].parents:
+            if not c.parents:
                 return
-            c = self.lookup_table[c].parents[0]
+            c = c.parents[0]
 
     def maxi(self, a, b):
         if self.higher(a, b):
@@ -201,7 +237,7 @@ class Hashgraph:
                 return False
 
     def higher(self, a, b):
-        return a is not None and (b is None or self.height[a] >= self.height[b])
+        return a is not None and (b is None or a.height >= b.height)
 
     def divide_rounds(self, events):
         """Restore invariants for `can_see`, `witnesses` and `round`.
@@ -210,34 +246,34 @@ class Hashgraph:
         """
 
         for h in events:
-            ev = self.lookup_table[h]
+            ev = h
             if ev.parents == ():  # this is a root event
-                self.round[h] = 0
+                h.round = 0
                 self.witnesses[0][ev.verify_key] = h
-                self.can_see[h] = {ev.verify_key: h}
+                h.can_see = {ev.verify_key: h}
             else:
-                r = max(self.round[p] for p in ev.parents)
+                r = max(p.round for p in ev.parents)
 
                 # recurrence relation to update can_see
-                p0, p1 = (self.can_see[p] for p in ev.parents)
-                self.can_see[h] = {c: self.maxi(p0.get(c), p1.get(c))
-                                   for c in p0.keys() | p1.keys()}
+                p0, p1 = (p.can_see for p in ev.parents)
+                h.can_see = {c: self.maxi(p0.get(c), p1.get(c))
+                             for c in p0.keys() | p1.keys()}
 
                 # count distinct paths to distinct nodes
                 hits = defaultdict(int)
-                for c, k in self.can_see[h].items():
-                    if self.round[k] == r:
-                        for c_, k_ in self.can_see[k].items():
-                            if self.round[k_] == r:
+                for c, k in h.can_see.items():
+                    if k.round == r:
+                        for c_, k_ in k.can_see.items():
+                            if k_.round == r:
                                 hits[c_] += self.stake[c]
                 # check if i can strongly see enough events
                 if sum(1 for x in hits.values() if x > self.min_s) > self.min_s:
-                    self.round[h] = r + 1
+                    h.round = r + 1
                 else:
-                    self.round[h] = r
-                self.can_see[h][ev.verify_key] = h
-                if self.round[h] > self.round[ev.parents[0]]:
-                    self.witnesses[self.round[h]][ev.verify_key] = h
+                    h.round = r
+                h.can_see[ev.verify_key] = h
+                if h.round > ev.parents[0].round:
+                    self.witnesses[h.round][ev.verify_key] = h
 
     def decide_fame(self):
         max_r = max(self.witnesses)
@@ -260,34 +296,34 @@ class Hashgraph:
 
         done = set()
 
-        for r_, y in iter_voters():
+        for r_, y in iter_voters():  # type: int, Event
 
             hits = defaultdict(int)
-            for c, k in self.can_see[y].items():
-                if self.round[k] == r_ - 1:
-                    for c_, k_ in self.can_see[k].items():
-                        if self.round[k_] == r_ - 1:
+            for c, k in y.can_see.items():
+                if k.round == r_ - 1:
+                    for c_, k_ in k.can_see.items():
+                        if k_.round == r_ - 1:
                             hits[c_] += self.stake[c]
             s = {self.witnesses[r_ - 1][c] for c, n in hits.items()
                  if n > self.min_s}
 
             for r, x in iter_undetermined(r_):
                 if r_ - r == 1:
-                    self.votes[y][x] = x in s
+                    y.votes[x] = x in s
                 else:
-                    v, t = majority((self.stake[self.lookup_table[w].verify_key], self.votes[w][x]) for w in s)
+                    v, t = majority((self.stake[self.lookup_table[w].verify_key], w.votes[x]) for w in s)
                     if (r_ - r) % C != 0:
                         if t > self.min_s:
                             self.famous[x] = v
                             done.add(r)
                         else:
-                            self.votes[y][x] = v
+                            y.votes[x] = v
                     else:
                         if t > self.min_s:
-                            self.votes[y][x] = v
+                            y.votes[x] = v
                         else:
                             # the 1st bit is same as any other bit right? # TODO not!
-                            self.votes[y][x] = bool(self.lookup_table[y].signature[0] // 128)
+                            y.votes[x] = bool(y.signature[0] // 128)
 
         new_c = {r for r in done
                  if all(w in self.famous for w in self.witnesses[r].values())}
@@ -305,16 +341,16 @@ class Hashgraph:
             for x in bfs(filter(self.tbd.__contains__, f_w),
                          lambda u: (p for p in self.lookup_table[u].parents if p in self.tbd)):
                 c = self.lookup_table[x].verify_key
-                s = {w for w in f_w if c in self.can_see[w]
-                     and self.higher(self.can_see[w][c], x)}
+                s = {w for w in f_w if c in w.can_see
+                     and self.higher(w.can_see[c], x)}
                 if sum(self.stake[self.lookup_table[w].verify_key] for w in s) > self.tot_stake / 2:
                     self.tbd.remove(x)
                     seen.add(x)
                     times = []
                     for w in s:
                         a = w
-                        while (c in self.can_see[a]
-                               and self.higher(self.can_see[a][c], x)
+                        while (c in a.can_see
+                               and self.higher(a.can_see[c], x)
                                and self.lookup_table[a].parents):
                             a = self.lookup_table[a].p[0]
                         times.append(self.lookup_table[a].t)
@@ -369,11 +405,10 @@ class HashgraphNetNode:
         self.hashgraph = Hashgraph()
 
         # init first local event
-        event = self.hashgraph.create_first_event(self.id)
-        event.sign(self.signing_key)
+        event = self.hashgraph.create_first_event(self.signing_key)
         self.hashgraph.add_first_event(event)
 
-        self.new = Queue()  # list of messages
+        self.new = []  # list of messages
 
     @property
     def n(self):
@@ -412,32 +447,34 @@ class HashgraphNetNode:
         logging.info("{}.sync:message = \n{}".format(self, pformat(fingerprint)))
 
         # NOTE: communication channel security must be provided in standard way: SSL
-        reply = node.ask_sync(self, fingerprint)
+        logging.info("{}.sync: reply acquired:".format(self))
 
-        logging.info("{}.sync: reply acquired = \n{}".format(self, pformat(reply)))
+        remote_head, difference = node.ask_sync(self, fingerprint)
+        logging.info("  remote_head = {}".format(remote_head))
+        logging.info("  difference  = {}".format(difference))
 
-        remote_head, remote_hg = reply
-
-        new = tuple(toposort(remote_hg.keys() - self.hashgraph.keys(),
-                             lambda u: remote_hg[u].parents))
+        # TODO move to hashgraph
+        new = tuple(toposort([event for event in difference if event.id not in self.hashgraph.lookup_table],  # difference.keys() - self.hashgraph.keys(),
+                             lambda u: u.parents))
 
         logging.info("{}.sync:new = \n{}".format(self, pformat(new)))
 
-        for h in new:
-            event = remote_hg[h]
-            if self.hashgraph.is_valid_event(h, event):  # TODO check?
+        # TODO move to hashgraph
+        for event in new:
+            if self.hashgraph.is_valid_event(event.id, event):  # TODO check?
                 self.hashgraph.add_event(event)  # (, h) ??
 
-        if self.hashgraph.is_valid_event(remote_head, remote_hg[remote_head]):
-            event = self.hashgraph.new_event(payload, remote_head, self.id)
-            event.sign(self.signing_key)
+        # TODO move to hashgraph
+        # TODO check DOUBLE add remote_head ?
+        if self.hashgraph.is_valid_event(remote_head.id, remote_head):  # TODO move id check to communication part
+            event = self.hashgraph.new_event(payload, remote_head, self.signing_key)
             self.hashgraph.add_event(event)
-            self.hashgraph.head = event.sha512
-            h = event.sha512
+            self.hashgraph.head = event
+            h = event.id
 
         logging.info("{}.sync exits.".format(self))
 
-        return new + (h,)
+        return new + (event,)
 
     def ask_sync(self, node, fingerprint):
         """Respond to someone wanting to sync (only public method)."""
@@ -447,6 +484,8 @@ class HashgraphNetNode:
 
         subset = self.hashgraph.difference(fingerprint)
 
+        # TODO Clear response from internal information !!!
+
         return self.hashgraph.head, subset
 
     def heartbeat_callback(self):
@@ -454,26 +493,21 @@ class HashgraphNetNode:
 
         logging.info("{}.heartbeat...".format(self))
 
-        payload = []
-        try:
-            while True:
-                message = self.new.get_nowait()
-                payload.append(message)
-        except Empty:
-            # Queue is empty - this is ok
-            pass
+        # payload = [event.id for event in self.new]
+        payload = ()  # TODO: it is not used!!! why?
+        self.new = []
 
         logging.info("{}.payload = {}".format(self, payload))
 
         # pick a random node to sync with but not me
         node = choice(list(self.neighbours.values()))
 
+        logging.info("{}.sync with {}".format(self, node))
         new = self.sync(node, payload)
 
         logging.info("{}.new = {}".format(self, new))
 
-        for message in new:  # TODO check is this logic correct, OR new - is whole hashgraph?
-            self.new.put(message)
+        self.new = list(new)
 
         self.hashgraph.divide_rounds(new)
 
@@ -483,7 +517,8 @@ class HashgraphNetNode:
         logging.info("{}.new_c = {}".format(self, new_c))
         logging.info("{}.heartbeat exits.".format(self))
 
-        return payload
+        # return payload
+        return self.new
 
 
 class LocalNetwork(object):
@@ -523,4 +558,4 @@ def run_network(n_nodes, n_turns):
 
 if __name__ == '__main__':
     logging.getLogger().setLevel(logging.DEBUG)
-    run_network(3, 10)
+    run_network(3, 100)
